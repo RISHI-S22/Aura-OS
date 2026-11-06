@@ -1,123 +1,157 @@
+"""
+Aura-OS Brain Core
+Subscribes to Audio (5555) and Telemetry (5557) event buses via ZMQ Poller.
+Streams tokens to TTS Engine (5556) via Ollama (Qwen 2.5:3b).
+"""
+
+import os
+import sys
+
+# Guarantee project root is in sys.path
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
 import json
 import re
-import sys
 import threading
 import time
-import ollama
+import requests
 import zmq
+from config import NET, MODELS
 
-# ZeroMQ Endpoints
-AUDIO_BUS_ADDR = "tcp://127.0.0.1:5555"   # Receives VOICE_INPUT and VOICE_INTERRUPT
-TTS_BUS_PORT = 5556                       # Publishes TTS_TEXT chunks for speaker_service
+OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
 
-MODEL_NAME = "qwen2.5:3b"
+SYSTEM_PROMPT = (
+    "You are Aura, an ambient edge OS companion. Speak concisely, clearly, and naturally "
+    "in 1 to 2 short sentences. When diagnosing terminal errors, state the exact root cause "
+    "and offer one actionable command fix immediately."
+)
 
-SYSTEM_PROMPT = """You are Aura, an ambient, autonomous edge OS copilot.
-Be direct, technically precise, and concise. 
-Avoid robotic filler. Respond in natural, conversational sentences suitable for speech synthesis."""
+class AuraBrain:
+    def __init__(self):
+        self.context = zmq.Context()
 
-abort_generation = threading.Event()
-generation_lock = threading.Lock()
+       # Inbound audio events from audio_service
+        self.sub_audio = self.context.socket(zmq.SUB)
+        self.sub_audio.connect(f"tcp://{NET.HOST}:{NET.EVENT_BUS_PORT}")
+        self.sub_audio.setsockopt_string(zmq.SUBSCRIBE, "VOICE_INPUT")
+        self.sub_audio.setsockopt_string(zmq.SUBSCRIBE, "VOICE_INTERRUPT")
 
-def create_tts_publisher(port: int):
-    context = zmq.Context()
-    socket = context.socket(zmq.PUB)
-    socket.bind(f"tcp://127.0.0.1:{port}")
-    return socket
+        # Telemetry ingestion: Brain binds to 5557 so any terminal can push crashes directly
+        self.sub_telemetry = self.context.socket(zmq.SUB)
+        self.sub_telemetry.bind(f"tcp://{NET.HOST}:{NET.TELEMETRY_PORT}")
+        self.sub_telemetry.setsockopt_string(zmq.SUBSCRIBE, "TERMINAL_CRASH")
 
-def process_and_stream_llm(user_prompt: str, tts_socket: zmq.Socket):
-    """Streams Qwen 2.5 tokens, buffers into sentences, and publishes them to TTS."""
-    with generation_lock:
-        abort_generation.clear()
-        print(f"\n[Aura Brain] Thinking...")
+        # Outbound TTS publisher
+        self.pub_tts = self.context.socket(zmq.PUB)
+        self.pub_tts.bind(f"tcp://{NET.HOST}:{NET.TTS_STREAM_PORT}")
 
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt}
-        ]
+        # Poller to multiplex audio and telemetry events without thread locking
+        self.poller = zmq.Poller()
+        self.poller.register(self.sub_audio, zmq.POLLIN)
+        self.poller.register(self.sub_telemetry, zmq.POLLIN)
 
-        sentence_delimiters = re.compile(r"([.?!:\n]+)")
-        sentence_buffer = ""
+        self.current_generation_id = 0
+        self.is_interrupted = False
+
+    def stream_to_tts(self, prompt: str, prefix_alert: str = ""):
+        """Streams LLM token generations in sentence chunks to the speaker service."""
+        self.current_generation_id += 1
+        gen_id = self.current_generation_id
+        self.is_interrupted = False
+
+        if prefix_alert:
+            self.pub_tts.send_string(f"TTS_CHUNK {json.dumps({'text': prefix_alert, 'gen_id': gen_id})}")
+
+        payload = {
+            "model": MODELS.LLM_MODEL,
+            "prompt": prompt,
+            "system": SYSTEM_PROMPT,
+            "stream": True,
+        }
 
         try:
-            stream = ollama.chat(model=MODEL_NAME, messages=messages, stream=True)
-            print("[Aura Brain Streaming]: ", end="", flush=True)
+            response = requests.post(OLLAMA_URL, json=payload, stream=True, timeout=10)
+            buffer = ""
 
-            for chunk in stream:
-                # Check if user spoke mid-sentence (barge-in interrupt)
-                if abort_generation.is_set():
-                    print("\n[!] Generation aborted by incoming user speech.")
-                    return
+            for line in response.iter_lines():
+                if self.is_interrupted or gen_id != self.current_generation_id:
+                    print("[⚡ Inference Aborted via Barge-In]")
+                    break
 
-                token = chunk.get("message", {}).get("content", "")
-                print(token, end="", flush=True)
-                sentence_buffer += token
+                if line:
+                    data = json.loads(line.decode("utf-8"))
+                    token = data.get("response", "")
+                    buffer += token
 
-                # Check if a sentence is complete
-                parts = sentence_delimiters.split(sentence_buffer)
-                if len(parts) > 1:
-                    # parts will alternate: [sentence_text, delimiter, sentence_text, delimiter, ...]
-                    complete_sentence = parts[0].strip() + parts[1].strip()
-                    sentence_buffer = "".join(parts[2:])
+                    if re.search(r"[.!?]\s*$", buffer):
+                        chunk = buffer.strip()
+                        buffer = ""
+                        if chunk:
+                            print(f"[Aura Brain -> TTS]: {chunk}")
+                            self.pub_tts.send_string(
+                                f"TTS_CHUNK {json.dumps({'text': chunk, 'gen_id': gen_id})}"
+                            )
 
-                    if complete_sentence:
-                        # Publish directly to speaker_service
-                        tts_socket.send_string(f"TTS_TEXT {complete_sentence}")
-
-            # Flush any trailing words left in the buffer
-            remaining = sentence_buffer.strip()
-            if remaining and not abort_generation.is_set():
-                tts_socket.send_string(f"TTS_TEXT {remaining}")
-
-            print("\n[Aura Brain] Turn complete.\n")
+            if buffer.strip() and not self.is_interrupted:
+                self.pub_tts.send_string(
+                    f"TTS_CHUNK {json.dumps({'text': buffer.strip(), 'gen_id': gen_id})}"
+                )
 
         except Exception as e:
-            print(f"\n[!] Error during LLM generation: {e}")
+            print(f"[!] Brain inference error: {e}")
 
-def main():
-    print(f"[+] Binding TTS Stream Publisher on port {TTS_BUS_PORT}...")
-    tts_socket = create_tts_publisher(TTS_BUS_PORT)
-    time.sleep(0.5)
+    def run(self):
+        print("=" * 60)
+        print("  🧠 Aura Brain Core Active")
+        print(f"  Audio Bus: {NET.EVENT_BUS_PORT} | Telemetry Bus: {NET.TELEMETRY_PORT} | TTS Bus: {NET.TTS_STREAM_PORT}")
+        print("=" * 60 + "\n")
 
-    context = zmq.Context()
-    audio_sub = context.socket(zmq.SUB)
-    audio_sub.connect(AUDIO_BUS_ADDR)
-    audio_sub.setsockopt_string(zmq.SUBSCRIBE, "VOICE_INPUT")
-    audio_sub.setsockopt_string(zmq.SUBSCRIBE, "VOICE_INTERRUPT")
-
-    print(f"[+] Connected to Audio Event Bus at {AUDIO_BUS_ADDR}")
-    print(f"[*] Aura Brain initialized with {MODEL_NAME}. Awaiting audio events...\n")
-
-    current_worker_thread = None
-
-    try:
         while True:
-            raw_msg = audio_sub.recv_string()
-            topic, payload_str = raw_msg.split(" ", 1)
+            socks = dict(self.poller.poll(50))
 
-            if topic == "VOICE_INTERRUPT":
-                # Immediately trip the abort event
-                abort_generation.set()
-
-            elif topic == "VOICE_INPUT":
+            if self.sub_audio in socks:
+                raw_msg = self.sub_audio.recv_string()
+                topic, payload_str = raw_msg.split(" ", 1)
                 payload = json.loads(payload_str)
-                user_text = payload.get("content", "").strip()
 
-                if not user_text:
-                    continue
+                if topic == "VOICE_INTERRUPT":
+                    print("[⚡ Barge-in Received] Cancelling ongoing inference...")
+                    self.is_interrupted = True
 
-                print(f"\n[Mic Capture Ingested]: \"{user_text}\"")
+                elif topic == "VOICE_INPUT":
+                    user_text = payload.get("content", "")
+                    print(f"\n[Mic Ingestion]: {user_text}")
+                    threading.Thread(
+                        target=self.stream_to_tts,
+                        args=(f"User says: {user_text}",),
+                        daemon=True,
+                    ).start()
 
-                # Launch generation in a thread so main loop remains responsive to interrupts
-                current_worker_thread = threading.Thread(
-                    target=process_and_stream_llm,
-                    args=(user_text, tts_socket),
-                    daemon=True
-                )
-                current_worker_thread.start()
+            if self.sub_telemetry in socks:
+                raw_msg = self.sub_telemetry.recv_string()
+                topic, payload_str = raw_msg.split(" ", 1)
+                payload = json.loads(payload_str)
 
-    except KeyboardInterrupt:
-        print("\n[!] Shutting down Aura Brain...")
+                if topic == "TERMINAL_CRASH":
+                    cmd = payload.get("command", "")
+                    stderr = payload.get("stderr", "")
+                    print(f"\n[🚨 Telemetry Ingestion]: Crash detected in '{cmd}'")
+                    print(f"[Stderr Slice]: {stderr[:150]}...")
+
+                    prompt = (
+                        f"The user ran the command '{cmd}' and encountered this error traceback:\n"
+                        f"{stderr}\n"
+                        f"State the diagnosis and the exact fix."
+                    )
+                    threading.Thread(
+                        target=self.stream_to_tts,
+                        args=(prompt, "Rishi, I noticed a terminal crash."),
+                        daemon=True,
+                    ).start()
 
 if __name__ == "__main__":
-    main()
+    brain = AuraBrain()
+    brain.run()
