@@ -27,31 +27,30 @@ def publish_crash_telemetry(socket: zmq.Socket, command: str, stderr_data: str, 
         "stderr": stderr_data.strip(),
         "timestamp": time.time(),
     }
-    # Allow ZeroMQ handshake to establish before sending
     time.sleep(0.2)
     socket.send_string(f"TERMINAL_CRASH {json.dumps(payload)}")
     print(f"\n[⚡ Telemetry Broadcasted] Crash detected in '{command}' (Exit Code {exit_code})")
-    time.sleep(0.3)
+    time.sleep(0.5)
 
 
 def run_monitored_command(command: str, pub_socket: zmq.Socket):
     """Executes a command and monitors stderr for failures."""
     print(f"[*] Monitoring execution: {command}")
 
-    process = subprocess.Popen(
+    # Use subprocess.run to prevent pipe deadlocks
+    result = subprocess.run(
         command,
         shell=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
     )
-    stdout, stderr = process.communicate()
 
-    if stdout:
-        print(stdout.strip())
+    if result.stdout:
+        print(result.stdout.strip())
 
-    if process.returncode != 0 and stderr:
-        publish_crash_telemetry(pub_socket, command, stderr, process.returncode)
+    if result.returncode != 0 and result.stderr:
+        print(f"[-] Command exited with status {result.returncode}")
+        publish_crash_telemetry(pub_socket, command, result.stderr, result.returncode)
 
 
 def main():
@@ -63,7 +62,6 @@ def main():
         target_cmd = " ".join(sys.argv[1:])
         run_monitored_command(target_cmd, pub_socket)
     else:
-        # Keep alive if started by supervisor runner
         try:
             while True:
                 time.sleep(1)
