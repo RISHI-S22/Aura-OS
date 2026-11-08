@@ -17,9 +17,7 @@ if ROOT_DIR not in sys.path:
 import zmq
 from config import NET
 
-
 def publish_crash_telemetry(socket: zmq.Socket, command: str, stderr_data: str, exit_code: int):
-    """Encapsulates a crash event and broadcasts it to the Aura Event Bus."""
     payload = {
         "source": "terminal_interceptor",
         "command": command,
@@ -32,18 +30,9 @@ def publish_crash_telemetry(socket: zmq.Socket, command: str, stderr_data: str, 
     print(f"\n[⚡ Telemetry Broadcasted] Crash detected in '{command}' (Exit Code {exit_code})")
     time.sleep(0.5)
 
-
 def run_monitored_command(command: str, pub_socket: zmq.Socket):
-    """Executes a command and monitors stderr for failures."""
     print(f"[*] Monitoring execution: {command}")
-
-    # Use subprocess.run to prevent pipe deadlocks
-    result = subprocess.run(
-        command,
-        shell=True,
-        capture_output=True,
-        text=True,
-    )
+    result = subprocess.run(command, shell=True, capture_output=True, text=True)
 
     if result.stdout:
         print(result.stdout.strip())
@@ -51,7 +40,6 @@ def run_monitored_command(command: str, pub_socket: zmq.Socket):
     if result.returncode != 0 and result.stderr:
         print(f"[-] Command exited with status {result.returncode}")
         publish_crash_telemetry(pub_socket, command, result.stderr, result.returncode)
-
 
 def main():
     context = zmq.Context()
@@ -67,7 +55,6 @@ def main():
                 time.sleep(1)
         except KeyboardInterrupt:
             pass
-
 
 if __name__ == "__main__":
     main()

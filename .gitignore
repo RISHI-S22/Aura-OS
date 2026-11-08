@@ -1,8 +1,29 @@
+# Virtual Environment
 venv/
+.venv/
+env/
+
+# Python Bytecode & Cache
 __pycache__/
-*.pyc
-.cache/
-*.onnx
+*.py[cod]
+*.class
+*.pyd
 
-storage/
+# Local Vector Store & Ephemeral Tooling
+storage/aura_memory/
+storage/dynamic_tools/
+storage/workspace/screen_debug/
+storage/workspace/*
+!storage/workspace/.gitkeep
 
+# Temporary debug files
+*.wav
+debug_capture.wav
+
+# IDE & OS Files
+.vscode/
+.idea/
+*.suo
+*.user
+Thumbs.db
+Desktop.ini

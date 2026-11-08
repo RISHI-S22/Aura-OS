@@ -15,23 +15,19 @@ ROOT_DIR = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-from config import NET
+from config import NET, PATHS
 import chromadb
 from chromadb.utils import embedding_functions
 
-STORAGE_DIR = os.path.join(ROOT_DIR, "storage", "aura_memory")
-os.makedirs(STORAGE_DIR, exist_ok=True)
-
+os.makedirs(PATHS.MEMORY, exist_ok=True)
 
 class AuraMemoryService:
     def __init__(self):
-        print(f"[+] Initializing Persistent Vector Memory at {STORAGE_DIR}...")
-        self.client = chromadb.PersistentClient(path=STORAGE_DIR)
-        
+        print(f"[+] Initializing Persistent Vector Memory at {PATHS.MEMORY}...")
+        self.client = chromadb.PersistentClient(path=PATHS.MEMORY)
         self.embed_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
             model_name="all-MiniLM-L6-v2"
         )
-        
         self.conv_collection = self.client.get_or_create_collection(
             name="conversations", embedding_function=self.embed_fn
         )
@@ -40,18 +36,14 @@ class AuraMemoryService:
         )
 
         self.context = zmq.Context()
-        
-        # Audio subscriber
         self.sub_audio = self.context.socket(zmq.SUB)
         self.sub_audio.connect(f"tcp://{NET.HOST}:{NET.EVENT_BUS_PORT}")
         self.sub_audio.setsockopt_string(zmq.SUBSCRIBE, "VOICE_INPUT")
 
-        # Telemetry subscriber
         self.sub_telemetry = self.context.socket(zmq.SUB)
         self.sub_telemetry.connect(f"tcp://{NET.HOST}:{NET.TELEMETRY_PORT}")
         self.sub_telemetry.setsockopt_string(zmq.SUBSCRIBE, "TERMINAL_CRASH")
 
-        # Memory Query Server (REP) for Brain RAG searches
         self.rep_query = self.context.socket(zmq.REP)
         self.rep_query.bind(f"tcp://{NET.HOST}:{NET.MEMORY_QUERY_PORT}")
 
@@ -85,7 +77,6 @@ class AuraMemoryService:
         print(f"[💾 Memory Logged] Indexed crash event for: '{command}'")
 
     def query_memory(self, query: str, n_results: int = 2) -> str:
-        """Searches conversation and crash history for relevant context."""
         retrieved_snippets = []
         try:
             telemetry_res = self.telemetry_collection.query(
@@ -101,7 +92,6 @@ class AuraMemoryService:
             conv_docs = conv_res.get("documents", [[]])[0]
             if conv_docs:
                 retrieved_snippets.extend(conv_docs)
-
         except Exception as e:
             print(f"[!] Query memory failed: {e}")
 
@@ -112,8 +102,7 @@ class AuraMemoryService:
         try:
             while True:
                 socks = dict(self.poller.poll(100))
-                
-                # Handle incoming memory search queries from Brain
+
                 if self.rep_query in socks:
                     request_str = self.rep_query.recv_string()
                     req = json.loads(request_str)
@@ -124,7 +113,7 @@ class AuraMemoryService:
 
                 if self.sub_audio in socks:
                     raw_msg = self.sub_audio.recv_string()
-                    topic, payload_str = raw_msg.split(" ", 1)
+                    _, payload_str = raw_msg.split(" ", 1)
                     payload = json.loads(payload_str)
                     content = payload.get("content", "")
                     if content:
@@ -132,16 +121,15 @@ class AuraMemoryService:
 
                 if self.sub_telemetry in socks:
                     raw_msg = self.sub_telemetry.recv_string()
-                    topic, payload_str = raw_msg.split(" ", 1)
+                    _, payload_str = raw_msg.split(" ", 1)
                     payload = json.loads(payload_str)
-                    cmd = payload.get("command", "")
-                    stderr = payload.get("stderr", "")
-                    exit_code = payload.get("exit_code", 1)
-                    self.log_crash(cmd, stderr, exit_code)
-
+                    self.log_crash(
+                        payload.get("command", ""),
+                        payload.get("stderr", ""),
+                        payload.get("exit_code", 1)
+                    )
         except KeyboardInterrupt:
             print("\n[!] Shutting down Memory Service...")
-
 
 if __name__ == "__main__":
     service = AuraMemoryService()

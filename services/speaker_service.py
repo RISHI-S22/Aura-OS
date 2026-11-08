@@ -1,6 +1,6 @@
 """
 Aura-OS Speaker Service
-Subscribes to TTS_CHUNK events on port 5556 and plays speech via local TTS.
+Subscribes to TTS_CHUNK events on port 5556 and handles vocal playback via pyttsx3.
 """
 
 import json
@@ -21,9 +21,7 @@ import pyttsx3
 
 speech_queue = queue.Queue()
 
-
 def tts_worker():
-    """Worker handling sequential speech synthesis without freezing SAPI5."""
     while True:
         item = speech_queue.get()
         if item is None:
@@ -33,11 +31,10 @@ def tts_worker():
         if text:
             try:
                 engine = pyttsx3.init("sapi5")
-                engine.setProperty("rate", 180)
+                engine.setProperty("rate", 185)
                 voices = engine.getProperty("voices")
                 if len(voices) > 1:
                     engine.setProperty("voice", voices[1].id)
-                
                 engine.say(text)
                 engine.runAndWait()
                 engine.stop()
@@ -45,7 +42,6 @@ def tts_worker():
             except Exception as e:
                 print(f"[!] Speaker playback error: {e}")
         speech_queue.task_done()
-
 
 def main():
     context = zmq.Context()
@@ -87,7 +83,6 @@ def main():
 
     except KeyboardInterrupt:
         print("\n[!] Shutting down Speaker Service...")
-
 
 if __name__ == "__main__":
     main()

@@ -1,7 +1,7 @@
 """
 Aura-OS Audio Capture & Speech Processing Service
-Continuous mic ingestion with Silero VAD, fast barge-in interrupts,
-and hallucination-suppressed faster-whisper transcription.
+Hardware-matched audio capture with native-rate downsampling,
+Silero VAD segmentation, and faster-whisper transcription.
 """
 
 import json
@@ -16,8 +16,8 @@ import torch
 import zmq
 from faster_whisper import WhisperModel
 from silero_vad import load_silero_vad
+from scipy.signal import resample_poly
 
-# Guarantee project root is in sys.path
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
 if ROOT_DIR not in sys.path:
@@ -25,46 +25,27 @@ if ROOT_DIR not in sys.path:
 
 from config import NET, AUDIO, MODELS
 
-# Thread-safe queue for offloading inference
 transcription_queue = queue.Queue()
 
-# Hallucination blacklist for low SNR / quiet background audio
 HALLUCINATION_BLACKLIST = {
-    "thank you.",
-    "thank you",
-    "thanks for watching.",
-    "thanks for watching",
-    "see you in the next video.",
-    "we'll see you in the next video.",
-    "subscribe to the channel.",
-    "you",
-    ".",
-    "next.",
-    "invite them.",
-    "on this.",
+    "thank you.", "thank you", "thanks for watching.", "thanks for watching",
+    "see you in the next video.", "we'll see you in the next video.",
+    "subscribe to the channel.", "you", ".", "next.", "invite them.", "on this."
 }
 
-
 def initialize_bus(port: int):
-    """Initializes the ZeroMQ PUB socket."""
     context = zmq.Context()
     socket = context.socket(zmq.PUB)
     socket.bind(f"tcp://{NET.HOST}:{port}")
     return socket
 
-
 def clean_transcription(text: str) -> str:
-    """Filters out empty or repetitive low-energy Whisper artifacts."""
     clean = text.strip()
-    if clean.lower() in HALLUCINATION_BLACKLIST:
-        return ""
-    if len(clean) <= 2:
+    if clean.lower() in HALLUCINATION_BLACKLIST or len(clean) <= 2:
         return ""
     return clean
 
-
 def transcription_worker(bus: zmq.Socket):
-    """Dedicated background worker running Whisper without blocking the audio stream."""
     print(f"[+] Initializing faster-whisper ({MODELS.WHISPER_MODEL}, {MODELS.WHISPER_COMPUTE})...")
     whisper_model = WhisperModel(
         MODELS.WHISPER_MODEL,
@@ -78,23 +59,22 @@ def transcription_worker(bus: zmq.Socket):
         if audio_data is None:
             break
 
-        # Discard audio fragments shorter than 0.4 seconds to prevent blip processing
-        if len(audio_data) < int(AUDIO.SAMPLE_RATE * 0.4):
+        # Discard clips shorter than 0.35s
+        if len(audio_data) < int(AUDIO.TARGET_SAMPLE_RATE * 0.35):
             transcription_queue.task_done()
             continue
 
-        print("[Speech Ended - Transcribing...]")
         try:
-            # Stricter decoding parameters to reject acoustic noise & phantom text
             segments, _ = whisper_model.transcribe(
                 audio_data,
-                beam_size=1,
+                beam_size=3,
                 condition_on_previous_text=False,
-                no_speech_threshold=0.6,
+                no_speech_threshold=0.5,
                 log_prob_threshold=-1.0,
             )
-            raw_text = "".join([segment.text for segment in segments])
+            raw_text = " ".join([segment.text for segment in segments])
             transcribed_text = clean_transcription(raw_text)
+
             if transcribed_text:
                 print(f"[Mic Capture]: {transcribed_text}")
                 payload = {
@@ -103,14 +83,10 @@ def transcription_worker(bus: zmq.Socket):
                     "timestamp": time.time(),
                 }
                 bus.send_string(f"VOICE_INPUT {json.dumps(payload)}")
-            else:
-                print("[!] Audio rejected: Low confidence or background noise artifact.")
-
         except Exception as e:
-            print(f"[!] Error during transcription: {e}")
+            print(f"[!] Transcription error: {e}")
         finally:
             transcription_queue.task_done()
-
 
 def main():
     print(f"[+] Initializing ZeroMQ Audio Event Bus on port {NET.EVENT_BUS_PORT}...")
@@ -123,48 +99,65 @@ def main():
     worker_thread = threading.Thread(target=transcription_worker, args=(bus,), daemon=True)
     worker_thread.start()
 
+    # Detect high-fidelity microphone (prefer Realtek internal array over bluetooth hands-free)
+    input_devices = sd.query_devices()
+    chosen_device_idx = None
+    for idx, dev in enumerate(input_devices):
+        if dev['max_input_channels'] > 0 and 'Realtek' in dev['name']:
+            chosen_device_idx = idx
+            break
+
+    if chosen_device_idx is None:
+        device_info = sd.query_devices(kind='input')
+        chosen_device_idx = device_info['index']
+    else:
+        device_info = sd.query_devices(chosen_device_idx)
+
+    native_rate = int(device_info['default_samplerate'])
+    channels = min(int(device_info['max_input_channels']), 2)
+    print(f"[+] Audio hardware: [{chosen_device_idx}] '{device_info['name']}' @ {native_rate}Hz ({channels} ch)")
+
+    chunk_size = int(native_rate * 0.032)
     audio_buffer = []
     silent_chunks = 0
     is_recording = False
 
-    # Stricter thresholds: 0.65 probability to trigger speech, 35 chunks (~1.1s) silence limit
-    vad_threshold = getattr(AUDIO, "VAD_THRESHOLD", 0.65)
-    silence_limit = getattr(AUDIO, "SILENCE_CHUNKS_LIMIT", 35)
-
     def audio_callback(indata, frames, time_info, status):
         nonlocal silent_chunks, is_recording, audio_buffer
 
-        if status:
-            print(f"[!] Audio stream status flag: {status}")
+        if channels > 1:
+            mono = np.mean(indata, axis=1)
+        else:
+            mono = indata.squeeze()
 
-        chunk = indata.copy().squeeze()
-        chunk_tensor = torch.from_numpy(chunk)
+        # Polyphase anti-aliasing resampling to 16 kHz
+        resampled_16k = resample_poly(mono, AUDIO.TARGET_SAMPLE_RATE, native_rate).astype(np.float32)
 
-        # Infer voice activity probability (fast ONNX execution ~1-2ms)
-        speech_prob = vad_model(chunk_tensor, AUDIO.SAMPLE_RATE).item()
+        if len(resampled_16k) > 512:
+            vad_chunk = resampled_16k[:512]
+        elif len(resampled_16k) < 512:
+            vad_chunk = np.pad(resampled_16k, (0, 512 - len(resampled_16k)))
+        else:
+            vad_chunk = resampled_16k
 
-        if speech_prob > vad_threshold:
+        chunk_tensor = torch.from_numpy(vad_chunk)
+        speech_prob = vad_model(chunk_tensor, AUDIO.TARGET_SAMPLE_RATE).item()
+
+        if speech_prob > AUDIO.VAD_THRESHOLD:
             if not is_recording:
                 is_recording = True
                 audio_buffer = []
                 print("[🎙️ Speech Detected]")
-
-                # Instant barge-in broadcast to halt ongoing speech synthesis
-                interrupt_event = {
-                    "event": "barge_in",
-                    "timestamp": time.time(),
-                }
+                interrupt_event = {"event": "barge_in", "timestamp": time.time()}
                 bus.send_string(f"VOICE_INTERRUPT {json.dumps(interrupt_event)}")
 
-            audio_buffer.append(chunk)
+            audio_buffer.append(resampled_16k)
             silent_chunks = 0
-
         elif is_recording:
-            audio_buffer.append(chunk)
+            audio_buffer.append(resampled_16k)
             silent_chunks += 1
 
-            # Speech completion check (padded to wait through natural conversational pauses)
-            if silent_chunks > silence_limit:
+            if silent_chunks > AUDIO.SILENCE_CHUNKS_LIMIT:
                 is_recording = False
                 full_audio = np.concatenate(audio_buffer, axis=0)
                 transcription_queue.put(full_audio)
@@ -172,15 +165,15 @@ def main():
     print("[*] Audio Service Active. Listening on microphone... (Ctrl+C to stop)\n")
 
     with sd.InputStream(
-        samplerate=AUDIO.SAMPLE_RATE,
-        channels=1,
+        device=chosen_device_idx,
+        samplerate=native_rate,
+        channels=channels,
         dtype="float32",
-        blocksize=AUDIO.CHUNK_SIZE,
+        blocksize=chunk_size,
         callback=audio_callback,
     ):
         while True:
             sd.sleep(100)
-
 
 if __name__ == "__main__":
     try:
