@@ -1,9 +1,9 @@
 """
 Aura-OS Audio Capture & Speech Processing Service
-Hardware-matched audio capture with native-rate downsampling,
-Silero VAD segmentation, and faster-whisper transcription.
+Minimalist, clean console output.
 """
 
+import collections
 import json
 import os
 import queue
@@ -17,6 +17,10 @@ import zmq
 from faster_whisper import WhisperModel
 from silero_vad import load_silero_vad
 from scipy.signal import resample_poly
+
+# Silence HuggingFace noise
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
@@ -41,31 +45,22 @@ def initialize_bus(port: int):
 
 def clean_transcription(text: str) -> str:
     clean = text.strip()
-    if clean.lower() in HALLUCINATION_BLACKLIST or len(clean) <= 2:
+    if clean.lower() in HALLUCINATION_BLACKLIST or len(clean) <= 1:
         return ""
     return clean
 
-def transcription_worker(bus: zmq.Socket):
-    print(f"[+] Initializing faster-whisper ({MODELS.WHISPER_MODEL}, {MODELS.WHISPER_COMPUTE})...")
-    whisper_model = WhisperModel(
-        MODELS.WHISPER_MODEL,
-        device="cpu",
-        compute_type=MODELS.WHISPER_COMPUTE,
-    )
-    print("[+] Whisper engine ready.\n")
-
+def transcription_worker(bus: zmq.Socket, whisper_model: WhisperModel):
     while True:
         audio_data = transcription_queue.get()
         if audio_data is None:
             break
 
-        # Discard clips shorter than 0.35s
-        if len(audio_data) < int(AUDIO.TARGET_SAMPLE_RATE * 0.35):
+        if len(audio_data) < int(AUDIO.TARGET_SAMPLE_RATE * 0.4):
             transcription_queue.task_done()
             continue
 
         try:
-            segments, _ = whisper_model.transcribe(
+            segments, info = whisper_model.transcribe(
                 audio_data,
                 beam_size=3,
                 condition_on_previous_text=False,
@@ -76,30 +71,37 @@ def transcription_worker(bus: zmq.Socket):
             transcribed_text = clean_transcription(raw_text)
 
             if transcribed_text:
-                print(f"[Mic Capture]: {transcribed_text}")
+                detected_lang = getattr(info, 'language', 'en')
+                print(f"\n[You ({detected_lang})]: {transcribed_text}")
                 payload = {
                     "source": "voice",
                     "content": transcribed_text,
+                    "language": detected_lang,
                     "timestamp": time.time(),
                 }
                 bus.send_string(f"VOICE_INPUT {json.dumps(payload)}")
-        except Exception as e:
-            print(f"[!] Transcription error: {e}")
+        except Exception:
+            pass
         finally:
             transcription_queue.task_done()
 
 def main():
-    print(f"[+] Initializing ZeroMQ Audio Event Bus on port {NET.EVENT_BUS_PORT}...")
     bus = initialize_bus(NET.EVENT_BUS_PORT)
-    time.sleep(0.5)
 
-    print("[+] Loading Silero VAD (Direct ONNX engine)...")
+    whisper_model = WhisperModel(
+        MODELS.WHISPER_MODEL,
+        device="cpu",
+        compute_type=MODELS.WHISPER_COMPUTE,
+    )
     vad_model = load_silero_vad(onnx=True)
 
-    worker_thread = threading.Thread(target=transcription_worker, args=(bus,), daemon=True)
+    worker_thread = threading.Thread(
+        target=transcription_worker,
+        args=(bus, whisper_model),
+        daemon=True
+    )
     worker_thread.start()
 
-    # Detect high-fidelity microphone (prefer Realtek internal array over bluetooth hands-free)
     input_devices = sd.query_devices()
     chosen_device_idx = None
     for idx, dev in enumerate(input_devices):
@@ -115,9 +117,11 @@ def main():
 
     native_rate = int(device_info['default_samplerate'])
     channels = min(int(device_info['max_input_channels']), 2)
-    print(f"[+] Audio hardware: [{chosen_device_idx}] '{device_info['name']}' @ {native_rate}Hz ({channels} ch)")
 
     chunk_size = int(native_rate * 0.032)
+    pre_roll_chunks = int(0.5 / 0.032)
+    pre_roll_buffer = collections.deque(maxlen=pre_roll_chunks)
+
     audio_buffer = []
     silent_chunks = 0
     is_recording = False
@@ -130,7 +134,6 @@ def main():
         else:
             mono = indata.squeeze()
 
-        # Polyphase anti-aliasing resampling to 16 kHz
         resampled_16k = resample_poly(mono, AUDIO.TARGET_SAMPLE_RATE, native_rate).astype(np.float32)
 
         if len(resampled_16k) > 512:
@@ -146,8 +149,7 @@ def main():
         if speech_prob > AUDIO.VAD_THRESHOLD:
             if not is_recording:
                 is_recording = True
-                audio_buffer = []
-                print("[🎙️ Speech Detected]")
+                audio_buffer = list(pre_roll_buffer)
                 interrupt_event = {"event": "barge_in", "timestamp": time.time()}
                 bus.send_string(f"VOICE_INTERRUPT {json.dumps(interrupt_event)}")
 
@@ -161,8 +163,12 @@ def main():
                 is_recording = False
                 full_audio = np.concatenate(audio_buffer, axis=0)
                 transcription_queue.put(full_audio)
-
-    print("[*] Audio Service Active. Listening on microphone... (Ctrl+C to stop)\n")
+                audio_buffer = []
+                silent_chunks = 0
+                if hasattr(vad_model, 'reset_states'):
+                    vad_model.reset_states()
+        else:
+            pre_roll_buffer.append(resampled_16k)
 
     with sd.InputStream(
         device=chosen_device_idx,
@@ -179,4 +185,4 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n[!] Shutting down Audio Service...")
+        pass

@@ -4,7 +4,15 @@ Defines messaging bus ports, audio pipeline rates, and engine models.
 """
 
 import os
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 from dataclasses import dataclass
+@dataclass(frozen=True)
+class AudioConfig:
+    TARGET_SAMPLE_RATE: int = 16000
+    VAD_THRESHOLD: float = 0.60       # 0.60 avoids false positives from desk/breathing noise
+    SILENCE_CHUNKS_LIMIT: int = 30    # ~0.95 seconds of silence marks the end of speech
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 

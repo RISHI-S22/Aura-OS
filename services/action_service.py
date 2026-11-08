@@ -80,7 +80,6 @@ class ActionExecutor:
         target = app_name.lower().strip()
         self.speak(f"Opening {app_name} on your desktop.")
 
-        # 1. Direct URI Protocol
         if target in URI_SHORTCUTS:
             try:
                 subprocess.Popen(f"start {URI_SHORTCUTS[target]}", shell=True)
@@ -88,7 +87,6 @@ class ActionExecutor:
             except Exception:
                 pass
 
-        # 2. Known Windows Executable
         if target in WIN_EXECUTABLES:
             try:
                 subprocess.Popen(f"start {WIN_EXECUTABLES[target]}", shell=True)
@@ -96,13 +94,11 @@ class ActionExecutor:
             except Exception:
                 pass
 
-        # 3. Direct execution via Windows PATH
         res = subprocess.run(f"where {target}", shell=True, capture_output=True, text=True)
         if res.returncode == 0:
             subprocess.Popen(f"start {target}", shell=True)
             return
 
-        # 4. Search and Launch via Windows Start Menu / shell:AppsFolder via PowerShell
         ps_command = f"""
         $app = Get-StartApps | Where-Object {{ $_.Name -like "*{target}*" }} | Select-Object -First 1
         if ($app) {{
@@ -116,7 +112,6 @@ class ActionExecutor:
         if ps_res.returncode == 0:
             return
 
-        # 5. Direct Windows Shell Search Keystroke Fallback
         print(f"[!] Resolving '{app_name}' via Windows Shell Dispatch...")
         pyautogui.press("win")
         time.sleep(0.3)
