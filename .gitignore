@@ -1,29 +1,54 @@
-# Virtual Environment
-venv/
+# Environments & Virtual Envs
 .venv/
+venv/
+ENV/
 env/
 
-# Python Bytecode & Cache
+# Python cache & artifacts
 __pycache__/
 *.py[cod]
 *.class
-*.pyd
+*.so
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Local Vector Store & Ephemeral Tooling
-storage/aura_memory/
-storage/dynamic_tools/
-storage/workspace/screen_debug/
-storage/workspace/*
-!storage/workspace/.gitkeep
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
 
-# Temporary debug files
-*.wav
-debug_capture.wav
+# Secrets & Environment variables
+.env
+.env.local
+*.env
 
-# IDE & OS Files
+# IDE / Editor
 .vscode/
 .idea/
-*.suo
-*.user
+*.swp
+*.swo
+
+# OS specific
 Thumbs.db
+ehthumbs.db
 Desktop.ini
+.BIN/
+.DS_Store
+
+# Node / Frontend (for future web app)
+node_modules/
+.next/
+out/
