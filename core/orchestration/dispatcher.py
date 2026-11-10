@@ -1,12 +1,12 @@
-def dry_run_dispatch(plan: list[dict]) -> list[dict]:
-    """Record what would be dispatched; deliberately performs no external action."""
-    return [
-        {
-            "task_id": task["task_id"],
-            "agent": task["agent"],
-            "status": "ready_for_tool_integration",
-            "executed": False,
-            "note": "Dry run only: no external action was performed.",
-        }
-        for task in plan
-    ]
+from typing import Dict, Any
+from agents.base.agent_registry import agent_registry
+
+class Dispatcher:
+    """Dispatches tasks to the designated specialist agent from registry."""
+    async def dispatch(self, agent_name: str, task: Dict[str, Any]) -> Dict[str, Any]:
+        agent = agent_registry.get(agent_name)
+        if not agent:
+            return {"status": "error", "message": f"Agent {agent_name} not found"}
+        return await agent.run(task)
+
+dispatcher = Dispatcher()

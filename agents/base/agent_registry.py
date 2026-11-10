@@ -1,14 +1,14 @@
+from typing import Dict, Optional
+from agents.base.base_agent import BaseAgent
+
 class AgentRegistry:
     def __init__(self):
-        self._agents = {}
+        self._agents: Dict[str, BaseAgent] = {}
 
-    def register(self, agent):
-        if not getattr(agent, "name", None):
-            raise ValueError("Agent must define a non-empty name")
+    def register(self, agent: BaseAgent):
         self._agents[agent.name] = agent
 
-    def get(self, name: str):
+    def get(self, name: str) -> Optional[BaseAgent]:
         return self._agents.get(name)
 
-    def names(self) -> list[str]:
-        return sorted(self._agents)
+agent_registry = AgentRegistry()

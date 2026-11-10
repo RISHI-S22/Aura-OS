@@ -1,10 +1,11 @@
-from typing import TypedDict, Any
+from typing import TypedDict, List, Dict, Any, Optional
 
-class AuraState(TypedDict, total=False):
+class AgentState(TypedDict):
     command: str
-    intent: dict[str, Any]
-    plan: list[dict[str, Any]]
-    execution_log: list[dict[str, Any]]
-    verification: dict[str, Any]
-    response: str
-    error: str
+    intent: str
+    plan: List[Dict[str, Any]]
+    current_step: int
+    artifacts: Dict[str, Any]
+    approval_needed: bool
+    status: str
+    error: Optional[str]

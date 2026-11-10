@@ -1,5 +1,6 @@
-from typing import Protocol, Any
+from typing import Protocol, Dict, Any
 
 class AgentProtocol(Protocol):
     name: str
-    async def run(self, task: dict[str, Any]) -> dict[str, Any]: ...
+    async def run(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        ...

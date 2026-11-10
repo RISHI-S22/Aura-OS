@@ -1,0 +1,2 @@
+class VisionOCR:
+    pass

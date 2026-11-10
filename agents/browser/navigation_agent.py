@@ -1,0 +1,2 @@
+class NavigationAgent:
+    pass

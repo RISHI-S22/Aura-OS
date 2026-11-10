@@ -1,10 +1,11 @@
+from typing import Dict, Any
 from abc import ABC, abstractmethod
-from typing import Any
 
 class BaseAgent(ABC):
-    name = "base"
+    def __init__(self, name: str, description: str = ""):
+        self.name = name
+        self.description = description
 
     @abstractmethod
-    async def run(self, task: dict[str, Any]) -> dict[str, Any]:
-        """Implementations must return structured results and must respect permissions."""
-        raise NotImplementedError
+    async def run(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        pass

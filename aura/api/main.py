@@ -1,33 +1,51 @@
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
+from typing import Dict, Any, List
+import agents
+from core.planning.task_planner import planner
 from core.orchestration.graph import aura_graph
-from core.verification.result_validator import validate_pipeline_result
 
 app = FastAPI(
     title="AURA OS API",
-    description="AURA cognitive planning foundation — milestone 1",
-    version="0.1.0",
+    description="Autonomous Universal Reasoning Assistant Central Brain Endpoint",
+    version="0.1.0"
 )
 
 class CommandRequest(BaseModel):
-    command: str = Field(min_length=3, max_length=5000)
+    command: str
+
+class CommandResponse(BaseModel):
+    intent: str
+    plan: List[Dict[str, Any]]
+    status: str
 
 @app.get("/health")
-async def health():
-    return {"status": "ok", "service": "aura-api", "mode": "dry_run"}
+@app.get("/api/v1/health")
+def health_check():
+    return {"status": "online", "system": "AURA-OS", "version": "0.1.0"}
 
-@app.post("/api/v1/commands")
-async def submit_command(request: CommandRequest):
-    try:
-        state = aura_graph.invoke({"command": request.command})
-        verification = validate_pipeline_result(state)
-        return {
-            "command": request.command,
-            "intent": state.get("intent"),
-            "plan": state.get("plan", []),
-            "execution_log": state.get("execution_log", []),
-            "verification": verification,
-            "response": state.get("response"),
-        }
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Aura pipeline failed: {type(exc).__name__}")
+@app.post("/api/v1/commands", response_model=CommandResponse)
+async def execute_command(req: CommandRequest):
+    if not req.command.strip():
+        raise HTTPException(status_code=400, detail="Command cannot be empty")
+
+    plan_result = planner.plan(req.command)
+    
+    initial_state = {
+        "command": req.command,
+        "intent": plan_result.intent,
+        "plan": [t.model_dump() for t in plan_result.subtasks],
+        "current_step": 0,
+        "artifacts": {},
+        "approval_needed": False,
+        "status": "planned",
+        "error": None
+    }
+    
+    final_state = aura_graph.invoke(initial_state)
+
+    return CommandResponse(
+        intent=final_state["intent"],
+        plan=final_state["plan"],
+        status=final_state["status"]
+    )

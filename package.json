@@ -1,0 +1,13 @@
+{
+  "name": "aura-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter web dev",
+    "build": "pnpm --filter web build",
+    "lint": "pnpm --filter web lint"
+  },
+  "devDependencies": {
+    "prettier": "^3.3.0"
+  }
+}

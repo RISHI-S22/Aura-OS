@@ -1,0 +1,2 @@
+class KnowledgeAgent:
+    pass

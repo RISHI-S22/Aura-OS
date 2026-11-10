@@ -1,0 +1,2 @@
+class ImageAgent:
+    pass

@@ -1,0 +1,2 @@
+class TaskAgent:
+    pass

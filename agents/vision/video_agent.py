@@ -1,0 +1,2 @@
+class VideoAgent:
+    pass

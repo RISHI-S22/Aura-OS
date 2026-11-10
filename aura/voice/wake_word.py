@@ -1,0 +1,2 @@
+class WakeWordDetector:
+    pass
