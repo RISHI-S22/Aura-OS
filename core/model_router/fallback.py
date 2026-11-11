@@ -1,6 +1,19 @@
+from typing import List
+
 class FallbackHandler:
-    @staticmethod
-    def get_fallback(current_model: str) -> str:
-        if "gemini" in current_model:
-            return "gpt-4o-mini"
-        return "gemini/gemini-1.5-flash"
+    """Manages fallback chains when primary models timeout or hit rate limits."""
+    MODEL_CHAIN: List[str] = [
+        "gemini/gemini-1.5-flash",
+        "gpt-4o-mini",
+        "ollama/qwen2.5:7b"
+    ]
+
+    @classmethod
+    def get_next(cls, current_model: str) -> str:
+        try:
+            idx = cls.MODEL_CHAIN.index(current_model)
+            if idx + 1 < len(cls.MODEL_CHAIN):
+                return cls.MODEL_CHAIN[idx + 1]
+        except ValueError:
+            pass
+        return cls.MODEL_CHAIN[0]
