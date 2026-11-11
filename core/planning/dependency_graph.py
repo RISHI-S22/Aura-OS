@@ -1,23 +1,48 @@
 from typing import List, Dict, Set
 
 class DependencyGraph:
-    """Validates and sequences DAG subtask dependencies."""
+    """Validates and sequences DAG subtask dependencies with cycle detection."""
     def __init__(self):
-        self.adj = {}
+        self.adj: Dict[str, List[str]] = {}
 
     def add_node(self, node_id: str, deps: List[str]):
         self.adj[node_id] = deps
 
-    def topological_sort(self) -> List[str]:
-        visited = set()
-        order = []
-        for node in self.adj:
-            self._visit(node, visited, order)
-        return order
+    def has_cycle(self) -> bool:
+        visited: Set[str] = set()
+        rec_stack: Set[str] = set()
 
-    def _visit(self, node: str, visited: Set[str], order: List[str]):
-        if node not in visited:
+        def dfs(node: str) -> bool:
             visited.add(node)
-            for dep in self.adj.get(node, []):
-                self._visit(dep, visited, order)
-            order.append(node)
+            rec_stack.add(node)
+            for neighbor in self.adj.get(node, []):
+                if neighbor not in visited:
+                    if dfs(neighbor):
+                        return True
+                elif neighbor in rec_stack:
+                    return True
+            rec_stack.remove(node)
+            return False
+
+        for node in list(self.adj.keys()):
+            if node not in visited:
+                if dfs(node):
+                    return True
+        return False
+
+    def topological_sort(self) -> List[str]:
+        if self.has_cycle():
+            raise ValueError("Cyclic dependency detected in task graph")
+        visited: Set[str] = set()
+        order: List[str] = []
+
+        def visit(node: str):
+            if node not in visited:
+                visited.add(node)
+                for dep in self.adj.get(node, []):
+                    visit(dep)
+                order.append(node)
+
+        for node in self.adj:
+            visit(node)
+        return order
