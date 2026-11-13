@@ -1,7 +1,8 @@
-from typing import List, Dict, Set
+from typing import Dict, List, Set
 
 class DependencyGraph:
     """Validates and sequences DAG subtask dependencies with cycle detection."""
+
     def __init__(self):
         self.adj: Dict[str, List[str]] = {}
 
@@ -25,9 +26,8 @@ class DependencyGraph:
             return False
 
         for node in list(self.adj.keys()):
-            if node not in visited:
-                if dfs(node):
-                    return True
+            if node not in visited and dfs(node):
+                return True
         return False
 
     def topological_sort(self) -> List[str]:
