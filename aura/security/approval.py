@@ -1,24 +1,25 @@
-from typing import Dict, Any, Optional
+from typing import Any, Dict
 
 class ApprovalGate:
-    """Manages pending human authorizations for sensitive operations."""
-    _pending: Dict[str, Dict[str, Any]] = {}
+    """Tracks pending human approvals for sensitive or irreversible actions."""
+
+    _requests: Dict[str, Dict[str, Any]] = {}
 
     @classmethod
-    def register_request(cls, request_id: str, action: str, details: Dict[str, Any]):
-        cls._pending[request_id] = {
+    def create_request(cls, request_id: str, action: str, payload: Dict[str, Any]):
+        cls._requests[request_id] = {
             "action": action,
-            "details": details,
-            "approved": False
+            "payload": payload,
+            "approved": False,
         }
 
     @classmethod
     def approve(cls, request_id: str) -> bool:
-        if request_id in cls._pending:
-            cls._pending[request_id]["approved"] = True
+        if request_id in cls._requests:
+            cls._requests[request_id]["approved"] = True
             return True
         return False
 
     @classmethod
     def is_approved(cls, request_id: str) -> bool:
-        return cls._pending.get(request_id, {}).get("approved", False)
+        return cls._requests.get(request_id, {}).get("approved", False)
