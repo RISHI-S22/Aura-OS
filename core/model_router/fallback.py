@@ -1,11 +1,13 @@
 from typing import List
 
 class FallbackHandler:
-    """Manages fallback chains when primary models timeout or hit rate limits."""
+    """Manages provider fallback chains for resilient LLM routing."""
+
     MODEL_CHAIN: List[str] = [
         "gemini/gemini-1.5-flash",
         "gpt-4o-mini",
-        "ollama/qwen2.5:7b"
+        "claude-3-5-sonnet-20241022",
+        "ollama/qwen2.5:7b",
     ]
 
     @classmethod
