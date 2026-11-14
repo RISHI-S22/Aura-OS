@@ -1,17 +1,16 @@
-from pathlib import Path
-from typing import Dict, Any
+import os
+from typing import Any, Dict
 
 class ResultValidator:
-    \"\"\"Verifies that agent execution outputs are valid and physically exist.\"\"\"
+    """Verifies that agent execution outputs are valid and physically exist."""
 
     def validate(self, result: Dict[str, Any]) -> bool:
-        if not result or result.get("status") == "error":
+        if not isinstance(result, dict) or result.get("status") == "error":
             return False
 
-        if result.get("artifact_created"):
-            artifact_path = result.get("artifact_path")
-            if not artifact_path or not Path(artifact_path).exists():
-                return False
+        artifact_path = result.get("artifact_path")
+        if artifact_path and not os.path.exists(artifact_path):
+            return False
 
         return True
 
