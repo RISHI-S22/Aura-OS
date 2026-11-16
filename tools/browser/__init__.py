@@ -1,26 +1,22 @@
-from typing import Dict, Any
+from typing import Any, Dict, List
 
-async def fetch_page_summary(url: str) -> Dict[str, Any]:
-    \"\"\"Launches headless Chromium via Playwright to extract page title and visible text.\"\"\"
-    try:
-        from playwright.async_api import async_playwright
-    except ImportError:
-        return {"status": "unavailable", "reason": "playwright not installed", "url": url}
+class UniversalBrowserPrimitive:
+    """Extracts interactive accessibility elements from any arbitrary webpage."""
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context()
-        page = await context.new_page()
-        try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=15000)
-            title = await page.title()
-            text = await page.locator("body").inner_text()
-            return {
-                "status": "success",
-                "url": url,
-                "title": title,
-                "excerpt": text[:1500].strip(),
-            }
-        finally:
-            await context.close()
-            await browser.close()
+    @staticmethod
+    def parse_interactive_nodes(accessibility_snapshot: Dict[str, Any]) -> List[Dict[str, str]]:
+        nodes: List[Dict[str, str]] = []
+        interactive_roles = {"button", "link", "textbox", "searchbox", "combobox", "menuitem", "checkbox"}
+
+        def walk(node: Dict[str, Any]):
+            if not isinstance(node, dict):
+                return
+            role = str(node.get("role", "")).lower()
+            name = str(node.get("name", "")).strip()
+            if role in interactive_roles and name:
+                nodes.append({"role": role, "name": name})
+            for child in node.get("children", []):
+                walk(child)
+
+        walk(accessibility_snapshot)
+        return nodes
