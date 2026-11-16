@@ -1,5 +1,6 @@
 from typing import Any, Dict
 from langgraph.graph import END, StateGraph
+from core.orchestration.dispatcher import dispatcher
 from core.orchestration.state import AgentState
 from core.planning.dependency_graph import DependencyGraph
 from core.planning.task_planner import planner
@@ -22,13 +23,13 @@ def plan_node(state: AgentState) -> Dict[str, Any]:
         "status": "planned",
     }
 
-def execute_node(state: AgentState) -> Dict[str, Any]:
+async def execute_node(state: AgentState) -> Dict[str, Any]:
     plan = state.get("plan", [])
     step = state.get("current_step", 0)
     artifacts = dict(state.get("artifacts", {}))
 
     while step < len(plan):
-        task = plan[step]
+        task = dict(plan[step])
         if task.get("requires_approval"):
             return {
                 "current_step": step,
@@ -36,7 +37,25 @@ def execute_node(state: AgentState) -> Dict[str, Any]:
                 "approval_needed": True,
                 "status": "pending_approval",
             }
-        artifacts[task["id"]] = f"Completed by {task['agent']}: {task['title']}"
+
+        # Attach upstream dependency outputs so downstream agents have full context
+        dep_outputs = {
+            dep_id: artifacts[dep_id]
+            for dep_id in task.get("dependencies", [])
+            if dep_id in artifacts
+        }
+        task["context"] = dep_outputs
+
+        result = await dispatcher.dispatch(task["agent"], task)
+        if result.get("status") == "error":
+            return {
+                "current_step": step,
+                "artifacts": artifacts,
+                "status": "failed",
+                "error": result.get("message", "Subtask execution failed"),
+            }
+
+        artifacts[task["id"]] = result
         step += 1
 
     return {

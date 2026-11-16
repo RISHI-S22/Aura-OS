@@ -1,5 +1,4 @@
 import uuid
-from typing import Any, Dict, List
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import agents  # noqa: F401
@@ -44,7 +43,7 @@ async def execute_command(req: CommandRequest):
         "error": None,
     }
 
-    final_state = aura_graph.invoke(initial_state)
+    final_state = await aura_graph.ainvoke(initial_state)
     memory_manager.episodic.record(
         session_id=session_id,
         command=req.command,
