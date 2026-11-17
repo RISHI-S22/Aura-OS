@@ -1,10 +1,17 @@
-from typing import Dict, Any
+import os
+import platform
+from typing import Any, Dict
+from memory.manager import memory_manager
 
 class ContextEngine:
-    """Aggregates contextual state across conversations, working memory, and system state."""
-    def get_context(self) -> Dict[str, Any]:
+    """Aggregates live OS environment state and memory context for cognition."""
+
+    def get_context(self, query: str = "") -> Dict[str, Any]:
         return {
-            "os": "Windows 11",
+            "os": f"{platform.system()} {platform.release()}",
+            "cwd": os.getcwd(),
             "active_mode": "autonomous",
-            "working_directory": "E:\\projects\\Aura-OS"
+            "memory": memory_manager.build_context_snapshot(query),
         }
+
+context_engine = ContextEngine()
