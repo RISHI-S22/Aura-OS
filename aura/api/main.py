@@ -2,6 +2,8 @@ import uuid
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import agents  # noqa: F401
+from agents.base.agent_registry import agent_registry
+from aura.integrations.mcp import mcp_registry
 from aura.security.approval import ApprovalGate
 from core.orchestration.graph import aura_graph
 from core.planning.task_planner import planner
@@ -23,6 +25,13 @@ class ApprovalRequest(BaseModel):
 @app.get("/api/v1/health")
 def health_check():
     return {"status": "online", "system": "AURA-OS", "version": "0.1.0"}
+
+@app.get("/api/v1/capabilities")
+def get_capabilities():
+    return {
+        "agents": list(agent_registry._agents.keys()),
+        "mcp_tools": mcp_registry.list_tools(),
+    }
 
 @app.post("/api/v1/commands")
 async def execute_command(req: CommandRequest):
