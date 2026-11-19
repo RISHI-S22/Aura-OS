@@ -3,7 +3,11 @@ from langgraph.graph import END, StateGraph
 from core.orchestration.dispatcher import dispatcher
 from core.orchestration.state import AgentState
 from core.planning.dependency_graph import DependencyGraph
+from core.planning.replanner import Replanner
 from core.planning.task_planner import planner
+from core.verification.action_checker import ActionChecker
+
+replanner = Replanner()
 
 def plan_node(state: AgentState) -> Dict[str, Any]:
     plan_obj = planner.plan(state["command"])
@@ -24,41 +28,53 @@ def plan_node(state: AgentState) -> Dict[str, Any]:
     }
 
 async def execute_node(state: AgentState) -> Dict[str, Any]:
-    plan = state.get("plan", [])
+    plan = list(state.get("plan", []))
     step = state.get("current_step", 0)
     artifacts = dict(state.get("artifacts", {}))
+    retried = set()
 
     while step < len(plan):
         task = dict(plan[step])
         if task.get("requires_approval"):
             return {
+                "plan": plan,
                 "current_step": step,
                 "artifacts": artifacts,
                 "approval_needed": True,
                 "status": "pending_approval",
             }
 
-        # Attach upstream dependency outputs so downstream agents have full context
-        dep_outputs = {
+        task["context"] = {
             dep_id: artifacts[dep_id]
             for dep_id in task.get("dependencies", [])
             if dep_id in artifacts
         }
-        task["context"] = dep_outputs
 
         result = await dispatcher.dispatch(task["agent"], task)
-        if result.get("status") == "error":
+        verified = ActionChecker.verify_step(task, result)
+
+        if not verified:
+            if task["id"] not in retried:
+                retried.add(task["id"])
+                err_msg = result.get("message", "Verification check failed")
+                recovery_plan = replanner.replan_on_failure(task["id"], err_msg, plan[step + 1:])
+                recovery_plan[0]["agent"] = task["agent"]
+                recovery_plan[0]["title"] = f"Retry: {task.get('title', '')}"
+                plan = plan[:step] + recovery_plan
+                continue
             return {
+                "plan": plan,
                 "current_step": step,
                 "artifacts": artifacts,
                 "status": "failed",
-                "error": result.get("message", "Subtask execution failed"),
+                "error": result.get("message", "Subtask failed after replanning"),
             }
 
         artifacts[task["id"]] = result
         step += 1
 
     return {
+        "plan": plan,
         "current_step": step,
         "artifacts": artifacts,
         "approval_needed": False,
