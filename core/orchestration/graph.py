@@ -54,7 +54,8 @@ async def execute_node(state: AgentState) -> Dict[str, Any]:
         verified = ActionChecker.verify_step(task, result)
 
         if not verified:
-            if task["id"] not in retried:
+            is_recovery = str(task["id"]).startswith("recover_")
+            if not is_recovery and task["id"] not in retried:
                 retried.add(task["id"])
                 err_msg = result.get("message", "Verification check failed")
                 recovery_plan = replanner.replan_on_failure(task["id"], err_msg, plan[step + 1:])
