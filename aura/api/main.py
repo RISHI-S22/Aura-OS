@@ -1,19 +1,34 @@
 import uuid
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import agents  # noqa: F401
 from agents.base.agent_registry import agent_registry
 from aura.integrations.mcp import mcp_registry
 from aura.security.approval import ApprovalGate
+from aura.voice.conversation import VoiceConversationEngine
+from core.orchestration.dispatcher import dispatcher
 from core.orchestration.graph import aura_graph
+from core.planning.dependency_graph import DependencyGraph
 from core.planning.task_planner import planner
+from core.verification.action_checker import ActionChecker
 from memory.manager import memory_manager
 
 app = FastAPI(
     title="AURA OS API",
     description="Autonomous Universal Reasoning Assistant Central Brain Endpoint",
-    version="0.1.0",
+    version="0.2.0",
 )
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+voice_engine = VoiceConversationEngine()
 
 class CommandRequest(BaseModel):
     command: str
@@ -24,7 +39,7 @@ class ApprovalRequest(BaseModel):
 @app.get("/health")
 @app.get("/api/v1/health")
 def health_check():
-    return {"status": "online", "system": "AURA-OS", "version": "0.1.0"}
+    return {"status": "online", "system": "AURA-OS", "version": "0.2.0"}
 
 @app.get("/api/v1/capabilities")
 def get_capabilities():
@@ -67,6 +82,79 @@ async def execute_command(req: CommandRequest):
         "artifacts": final_state.get("artifacts", {}),
         "status": final_state["status"],
     }
+
+@app.post("/api/v1/voice/utterance")
+async def execute_voice_utterance(req: CommandRequest):
+    if not req.command.strip():
+        raise HTTPException(status_code=400, detail="Transcript cannot be empty")
+    return await voice_engine.process_text_utterance(req.command)
+
+@app.websocket("/ws/commands")
+async def websocket_command_stream(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            payload = await websocket.receive_json()
+            command = str(payload.get("command", "")).strip()
+            if not command:
+                await websocket.send_json({"event": "error", "detail": "Empty command"})
+                continue
+
+            session_id = str(uuid.uuid4())[:8]
+            plan_obj = planner.plan(command)
+            subtasks = [t.model_dump() for t in plan_obj.subtasks]
+
+            dag = DependencyGraph()
+            for t in subtasks:
+                dag.add_node(t["id"], t.get("dependencies", []))
+            id_map = {t["id"]: t for t in subtasks}
+            ordered = [id_map[tid] for tid in dag.topological_sort()]
+
+            await websocket.send_json({
+                "event": "planned",
+                "session_id": session_id,
+                "intent": plan_obj.intent,
+                "plan": ordered,
+            })
+
+            artifacts = {}
+            halted = False
+            for task in ordered:
+                if task.get("requires_approval"):
+                    await websocket.send_json({
+                        "event": "pending_approval",
+                        "session_id": session_id,
+                        "task": task,
+                    })
+                    halted = True
+                    break
+
+                await websocket.send_json({
+                    "event": "step_started",
+                    "session_id": session_id,
+                    "task_id": task["id"],
+                    "agent": task["agent"],
+                })
+                task["context"] = {d: artifacts[d] for d in task.get("dependencies", []) if d in artifacts}
+                res = await dispatcher.dispatch(task["agent"], task)
+                verified = ActionChecker.verify_step(task, res)
+                artifacts[task["id"]] = res
+                await websocket.send_json({
+                    "event": "step_verified" if verified else "step_failed",
+                    "session_id": session_id,
+                    "task_id": task["id"],
+                    "result": res,
+                })
+
+            if not halted:
+                memory_manager.episodic.record(session_id, command, "completed", artifacts)
+                await websocket.send_json({
+                    "event": "completed",
+                    "session_id": session_id,
+                    "artifacts": artifacts,
+                })
+    except WebSocketDisconnect:
+        pass
 
 @app.get("/api/v1/history")
 def get_history(limit: int = 10):
