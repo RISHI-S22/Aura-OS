@@ -1,7 +1,7 @@
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 class ApprovalGate:
-    """Tracks pending human approvals for sensitive or irreversible actions."""
+    """Tracks pending human approvals and suspended graph states for seamless resume."""
 
     _requests: Dict[str, Dict[str, Any]] = {}
 
@@ -23,3 +23,8 @@ class ApprovalGate:
     @classmethod
     def is_approved(cls, request_id: str) -> bool:
         return cls._requests.get(request_id, {}).get("approved", False)
+
+    @classmethod
+    def get_payload(cls, request_id: str) -> Optional[Dict[str, Any]]:
+        req = cls._requests.get(request_id)
+        return req["payload"] if req else None

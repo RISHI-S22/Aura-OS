@@ -8,7 +8,7 @@ from aura.integrations.mcp import mcp_registry
 from aura.security.approval import ApprovalGate
 from aura.voice.conversation import VoiceConversationEngine
 from core.orchestration.dispatcher import dispatcher
-from core.orchestration.graph import aura_graph
+from core.orchestration.graph import aura_graph, execute_node
 from core.planning.dependency_graph import DependencyGraph
 from core.planning.task_planner import planner
 from core.verification.action_checker import ActionChecker
@@ -17,7 +17,7 @@ from memory.manager import memory_manager
 app = FastAPI(
     title="AURA OS API",
     description="Autonomous Universal Reasoning Assistant Central Brain Endpoint",
-    version="0.2.0",
+    version="0.3.0",
 )
 
 app.add_middleware(
@@ -39,7 +39,7 @@ class ApprovalRequest(BaseModel):
 @app.get("/health")
 @app.get("/api/v1/health")
 def health_check():
-    return {"status": "online", "system": "AURA-OS", "version": "0.2.0"}
+    return {"status": "online", "system": "AURA-OS", "version": "0.3.0"}
 
 @app.get("/api/v1/capabilities")
 def get_capabilities():
@@ -68,6 +68,9 @@ async def execute_command(req: CommandRequest):
     }
 
     final_state = await aura_graph.ainvoke(initial_state)
+    if final_state["status"] == "pending_approval":
+        ApprovalGate.create_request(session_id, req.command, final_state)
+
     memory_manager.episodic.record(
         session_id=session_id,
         command=req.command,
@@ -81,6 +84,34 @@ async def execute_command(req: CommandRequest):
         "plan": final_state["plan"],
         "artifacts": final_state.get("artifacts", {}),
         "status": final_state["status"],
+    }
+
+@app.post("/api/v1/sessions/{session_id}/resume")
+async def resume_session(session_id: str):
+    saved_state = ApprovalGate.get_payload(session_id)
+    if not saved_state:
+        raise HTTPException(status_code=404, detail="Suspended session not found")
+
+    ApprovalGate.approve(session_id)
+    resumed_state = dict(saved_state)
+    step = resumed_state.get("current_step", 0)
+    plan = [dict(t) for t in resumed_state.get("plan", [])]
+    if step < len(plan):
+        plan[step]["requires_approval"] = False
+    resumed_state["plan"] = plan
+    resumed_state["approval_needed"] = False
+
+    final_state = await execute_node(resumed_state)
+    memory_manager.episodic.record(
+        session_id=session_id,
+        command=resumed_state.get("command", ""),
+        status=final_state["status"],
+        artifacts=final_state.get("artifacts", {}),
+    )
+    return {
+        "session_id": session_id,
+        "status": final_state["status"],
+        "artifacts": final_state.get("artifacts", {}),
     }
 
 @app.post("/api/v1/voice/utterance")
@@ -119,8 +150,21 @@ async def websocket_command_stream(websocket: WebSocket):
 
             artifacts = {}
             halted = False
-            for task in ordered:
+            for idx, task in enumerate(ordered):
                 if task.get("requires_approval"):
+                    ApprovalGate.create_request(
+                        session_id,
+                        command,
+                        {
+                            "command": command,
+                            "intent": plan_obj.intent,
+                            "plan": ordered,
+                            "current_step": idx,
+                            "artifacts": artifacts,
+                            "approval_needed": True,
+                            "status": "pending_approval",
+                        },
+                    )
                     await websocket.send_json({
                         "event": "pending_approval",
                         "session_id": session_id,
