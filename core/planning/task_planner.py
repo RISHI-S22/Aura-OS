@@ -1,64 +1,84 @@
 import json
 from typing import List, Optional
 from pydantic import BaseModel, Field
+from core.cognition.context_engine import context_engine
 from core.model_router.router import model_router
 
 class SubTask(BaseModel):
     id: str
     title: str
-    agent: str = Field(description="Assigned agent: research_agent, document_agent, email_agent, browser_agent, desktop_agent")
-    requires_approval: bool = False
+    agent: str
     dependencies: List[str] = Field(default_factory=list)
+    requires_approval: bool = False
 
-class PlanDecomposition(BaseModel):
+class ExecutionPlan(BaseModel):
     intent: str
     subtasks: List[SubTask]
 
 class CognitivePlanner:
-    """Uses LLM reasoning or heuristic fallback to decompose natural language requests."""
+    """Decomposes arbitrary natural-language goals into topological multi-agent DAGs."""
 
-    SYSTEM_PROMPT = """You are AURA's central cognitive planner.
-Analyze the user command and decompose it into an ordered task graph of discrete subtasks.
-Assign each subtask to the most appropriate agent:
-- research_agent: Web searches, reading documentation, gathering information
-- document_agent: Generating spreadsheets, markdown, presentations, code files
-- email_agent: Drafting or sending emails (always set requires_approval=True)
-- browser_agent: Navigating live websites, forms, and online workflows
-- desktop_agent: Operating local OS applications and desktop software
+    SYSTEM_PROMPT = (
+        "You are AURA's Cognitive Planner. Decompose the user's goal into a minimal, ordered DAG "
+        "of subtasks using ONLY these agents: 'research_agent', 'document_agent', 'browser_agent', "
+        "'desktop_agent'. Set 'requires_approval' to true ONLY for irreversible external actions "
+        "(sending messages/emails, purchases, deleting files, terminal execution). "
+        "Return valid JSON matching: {\"intent\": str, \"subtasks\": [{\"id\": str, \"title\": str, "
+        "\"agent\": str, \"dependencies\": [str], \"requires_approval\": bool}]}."
+    )
 
-Return valid JSON conforming to the schema with fields 'intent' and 'subtasks'."""
+    def plan(self, command: str) -> ExecutionPlan:
+        ctx = context_engine.get_context(command)
+        learned = ctx.get("memory", {}).get("learned_procedures", [])
 
-    def plan(self, command: str) -> PlanDecomposition:
         messages = [
             {"role": "system", "content": self.SYSTEM_PROMPT},
-            {"role": "user", "content": f"Command: {command}"}
+            {
+                "role": "user",
+                "content": json.dumps({
+                    "command": command,
+                    "os": ctx.get("os"),
+                    "learned_procedures": learned,
+                }),
+            },
         ]
 
         try:
-            response = model_router.completion(
+            resp = model_router.completion(
                 messages=messages,
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
             )
-            raw_content = response.choices[0].message.content
-            data = json.loads(raw_content)
-            return PlanDecomposition(**data)
+            raw = json.loads(resp.choices[0].message.content)
+            subtasks = [SubTask(**t) for t in raw.get("subtasks", [])]
+            if subtasks:
+                return ExecutionPlan(intent=raw.get("intent", "autonomous_task"), subtasks=subtasks)
         except Exception:
-            return self._heuristic_fallback(command)
+            pass
 
-    def _heuristic_fallback(self, command: str) -> PlanDecomposition:
-        cmd_lower = command.lower()
-        subtasks = []
-        if "research" in cmd_lower or "search" in cmd_lower:
-            subtasks.append(SubTask(id="task_1", title="Conduct deep research", agent="research_agent"))
-        if "spreadsheet" in cmd_lower or "presentation" in cmd_lower or "slides" in cmd_lower or "prepare" in cmd_lower:
-            subtasks.append(SubTask(id="task_2", title="Synthesize document artifact", agent="document_agent", dependencies=["task_1"] if subtasks else []))
-        if "email" in cmd_lower or "send" in cmd_lower:
-            deps = [s.id for s in subtasks]
-            subtasks.append(SubTask(id="task_3", title="Draft and dispatch email", agent="email_agent", requires_approval=True, dependencies=deps))
+        return self._heuristic_plan(command)
 
-        if not subtasks:
-            subtasks.append(SubTask(id="task_1", title="General task execution", agent="research_agent"))
+    def _heuristic_plan(self, command: str) -> ExecutionPlan:
+        cmd = command.lower()
+        tasks: List[SubTask] = []
 
-        return PlanDecomposition(intent="compound_task", subtasks=subtasks)
+        if "research" in cmd and ("spreadsheet" in cmd or "document" in cmd or "report" in cmd):
+            tasks.append(SubTask(id="t1", title=f"Gather data: {command}", agent="research_agent"))
+            tasks.append(SubTask(id="t2", title=f"Synthesize output: {command}", agent="document_agent", dependencies=["t1"]))
+            return ExecutionPlan(intent="research_and_synthesis", subtasks=tasks)
+
+        if any(w in cmd for w in ("email", "send", "message", "buy", "purchase", "delete")):
+            tasks.append(SubTask(id="t1", title=command, agent="desktop_agent", requires_approval=True))
+            return ExecutionPlan(intent="gated_action", subtasks=tasks)
+
+        if any(w in cmd for w in ("browse", "website", "search web", "url", "http")):
+            tasks.append(SubTask(id="t1", title=command, agent="browser_agent"))
+            return ExecutionPlan(intent="web_navigation", subtasks=tasks)
+
+        if any(w in cmd for w in ("open", "click", "type", "window", "app", "draw", "code")):
+            tasks.append(SubTask(id="t1", title=command, agent="desktop_agent"))
+            return ExecutionPlan(intent="desktop_control", subtasks=tasks)
+
+        tasks.append(SubTask(id="t1", title=command, agent="research_agent"))
+        return ExecutionPlan(intent="general_inquiry", subtasks=tasks)
 
 planner = CognitivePlanner()
