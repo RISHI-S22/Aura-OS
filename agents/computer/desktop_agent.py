@@ -41,17 +41,29 @@ class DesktopAgent(BaseAgent):
                 text=decision.get("text"),
                 dry_run=not live_mode,
             )
+
+            if decision.get("action") == "done" or not live_mode:
+                history.append({
+                    "step": step_idx + 1,
+                    "before_sig": before_sig,
+                    "state_changed": False,
+                    "decision": decision,
+                    "actuation": act_result,
+                })
+                break
+
+            next_controls = UniversalDesktopPrimitive.capture_active_window_controls()
+            next_actionable = self.analyzer.analyze(next_controls)["actionable_controls"]
+            changed = ScreenDeltaVerifier.has_state_changed(actionable, next_actionable)
+
             history.append({
                 "step": step_idx + 1,
                 "before_sig": before_sig,
+                "state_changed": changed,
                 "decision": decision,
                 "actuation": act_result,
             })
-
-            if decision.get("action") == "done" or not live_mode:
-                break
-
-            raw_controls = UniversalDesktopPrimitive.capture_active_window_controls()
+            raw_controls = next_controls
 
         return {
             "status": "success",
