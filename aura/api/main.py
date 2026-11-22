@@ -17,7 +17,7 @@ from memory.manager import memory_manager
 app = FastAPI(
     title="AURA OS API",
     description="Autonomous Universal Reasoning Assistant Central Brain Endpoint",
-    version="0.3.0",
+    version="0.4.0",
 )
 
 app.add_middleware(
@@ -32,6 +32,7 @@ voice_engine = VoiceConversationEngine()
 
 class CommandRequest(BaseModel):
     command: str
+    live_mode: bool = False
 
 class ApprovalRequest(BaseModel):
     request_id: str
@@ -39,7 +40,7 @@ class ApprovalRequest(BaseModel):
 @app.get("/health")
 @app.get("/api/v1/health")
 def health_check():
-    return {"status": "online", "system": "AURA-OS", "version": "0.3.0"}
+    return {"status": "online", "system": "AURA-OS", "version": "0.4.0"}
 
 @app.get("/api/v1/capabilities")
 def get_capabilities():
@@ -55,11 +56,16 @@ async def execute_command(req: CommandRequest):
 
     session_id = str(uuid.uuid4())[:8]
     plan_result = planner.plan(req.command)
+    subtasks = []
+    for t in plan_result.subtasks:
+        d = t.model_dump()
+        d["live_os"] = req.live_mode
+        subtasks.append(d)
 
     initial_state = {
         "command": req.command,
         "intent": plan_result.intent,
-        "plan": [t.model_dump() for t in plan_result.subtasks],
+        "plan": subtasks,
         "current_step": 0,
         "artifacts": {},
         "approval_needed": False,
@@ -70,6 +76,14 @@ async def execute_command(req: CommandRequest):
     final_state = await aura_graph.ainvoke(initial_state)
     if final_state["status"] == "pending_approval":
         ApprovalGate.create_request(session_id, req.command, final_state)
+    elif final_state["status"] == "completed":
+        for res in final_state.get("artifacts", {}).values():
+            if isinstance(res, dict) and res.get("execution_trace"):
+                memory_manager.procedural.record_procedure(
+                    goal=req.command,
+                    agent=res.get("agent", "unknown"),
+                    action_sequence=res["execution_trace"],
+                )
 
     memory_manager.episodic.record(
         session_id=session_id,
@@ -127,13 +141,18 @@ async def websocket_command_stream(websocket: WebSocket):
         while True:
             payload = await websocket.receive_json()
             command = str(payload.get("command", "")).strip()
+            live_mode = bool(payload.get("live_mode", False))
             if not command:
                 await websocket.send_json({"event": "error", "detail": "Empty command"})
                 continue
 
             session_id = str(uuid.uuid4())[:8]
             plan_obj = planner.plan(command)
-            subtasks = [t.model_dump() for t in plan_obj.subtasks]
+            subtasks = []
+            for t in plan_obj.subtasks:
+                d = t.model_dump()
+                d["live_os"] = live_mode
+                subtasks.append(d)
 
             dag = DependencyGraph()
             for t in subtasks:
