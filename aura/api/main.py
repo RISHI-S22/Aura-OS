@@ -17,7 +17,7 @@ from memory.manager import memory_manager
 app = FastAPI(
     title="AURA OS API",
     description="Autonomous Universal Reasoning Assistant Central Brain Endpoint",
-    version="0.4.0",
+    version="0.5.0",
 )
 
 app.add_middleware(
@@ -40,7 +40,7 @@ class ApprovalRequest(BaseModel):
 @app.get("/health")
 @app.get("/api/v1/health")
 def health_check():
-    return {"status": "online", "system": "AURA-OS", "version": "0.4.0"}
+    return {"status": "online", "system": "AURA-OS", "version": "0.5.0"}
 
 @app.get("/api/v1/capabilities")
 def get_capabilities():
@@ -48,6 +48,10 @@ def get_capabilities():
         "agents": list(agent_registry._agents.keys()),
         "mcp_tools": mcp_registry.list_tools(),
     }
+
+@app.get("/api/v1/memory/procedures")
+def get_learned_procedures(q: str = "", limit: int = 10):
+    return {"procedures": memory_manager.procedural.recall(q, limit=limit)}
 
 @app.post("/api/v1/commands")
 async def execute_command(req: CommandRequest):

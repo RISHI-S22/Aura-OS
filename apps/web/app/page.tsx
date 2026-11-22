@@ -4,6 +4,7 @@ import React, { useState } from "react";
 
 export default function HomePage() {
   const [command, setCommand] = useState("");
+  const [liveMode, setLiveMode] = useState(false);
   const [events, setEvents] = useState<any[]>([]);
   const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -18,7 +19,7 @@ export default function HomePage() {
     try {
       const ws = new WebSocket("ws://127.0.0.1:8000/ws/commands");
       ws.onopen = () => {
-        ws.send(JSON.stringify({ command }));
+        ws.send(JSON.stringify({ command, live_mode: liveMode }));
       };
       ws.onmessage = (msg) => {
         const parsed = JSON.parse(msg.data);
@@ -35,7 +36,7 @@ export default function HomePage() {
         const res = await fetch("http://127.0.0.1:8000/api/v1/commands", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ command }),
+          body: JSON.stringify({ command, live_mode: liveMode }),
         });
         const data = await res.json();
         setEvents([data]);
@@ -69,23 +70,34 @@ export default function HomePage() {
       <h1 className="text-5xl font-extrabold tracking-wider bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent mb-3">
         AURA
       </h1>
-      <p className="text-neutral-400 mb-8">Autonomous Universal Reasoning Assistant — Live Execution Cockpit</p>
+      <p className="text-neutral-400 mb-6">Autonomous Universal Reasoning Assistant — Live Execution Cockpit</p>
 
-      <form onSubmit={handleDispatch} className="w-full max-w-2xl flex gap-3 mb-6">
-        <input
-          type="text"
-          value={command}
-          onChange={(e) => setCommand(e.target.value)}
-          placeholder="Enter an autonomous command..."
-          className="flex-1 rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-white focus:border-cyan-500 focus:outline-none"
-        />
-        <button
-          type="submit"
-          disabled={loading}
-          className="rounded-lg bg-cyan-600 px-6 py-3 font-semibold text-white hover:bg-cyan-500 disabled:opacity-50"
-        >
-          {loading ? "Streaming..." : "Dispatch"}
-        </button>
+      <form onSubmit={handleDispatch} className="w-full max-w-2xl space-y-3 mb-6">
+        <div className="flex gap-3">
+          <input
+            type="text"
+            value={command}
+            onChange={(e) => setCommand(e.target.value)}
+            placeholder="Enter an autonomous command..."
+            className="flex-1 rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-white focus:border-cyan-500 focus:outline-none"
+          />
+          <button
+            type="submit"
+            disabled={loading}
+            className="rounded-lg bg-cyan-600 px-6 py-3 font-semibold text-white hover:bg-cyan-500 disabled:opacity-50"
+          >
+            {loading ? "Streaming..." : "Dispatch"}
+          </button>
+        </div>
+        <label className="flex items-center gap-2 text-xs text-neutral-400 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={liveMode}
+            onChange={(e) => setLiveMode(e.target.checked)}
+            className="rounded border-neutral-700 bg-neutral-900 text-cyan-500"
+          />
+          Enable Live OS / Browser Actuation (uncheck for Safe Dry-Run)
+        </label>
       </form>
 
       {pendingSessionId && (
