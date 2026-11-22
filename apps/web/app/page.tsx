@@ -5,6 +5,7 @@ import React, { useState } from "react";
 export default function HomePage() {
   const [command, setCommand] = useState("");
   const [events, setEvents] = useState<any[]>([]);
+  const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   const handleDispatch = async (e: React.FormEvent) => {
@@ -12,6 +13,7 @@ export default function HomePage() {
     if (!command.trim()) return;
     setLoading(true);
     setEvents([]);
+    setPendingSessionId(null);
 
     try {
       const ws = new WebSocket("ws://127.0.0.1:8000/ws/commands");
@@ -21,6 +23,9 @@ export default function HomePage() {
       ws.onmessage = (msg) => {
         const parsed = JSON.parse(msg.data);
         setEvents((prev) => [...prev, parsed]);
+        if (parsed.event === "pending_approval") {
+          setPendingSessionId(parsed.session_id);
+        }
         if (["completed", "pending_approval", "error"].includes(parsed.event)) {
           setLoading(false);
           ws.close();
@@ -32,10 +37,29 @@ export default function HomePage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ command }),
         });
-        setEvents([await res.json()]);
+        const data = await res.json();
+        setEvents([data]);
+        if (data.status === "pending_approval") {
+          setPendingSessionId(data.session_id);
+        }
         setLoading(false);
       };
     } catch {
+      setLoading(false);
+    }
+  };
+
+  const handleApproveAndResume = async () => {
+    if (!pendingSessionId) return;
+    setLoading(true);
+    try {
+      const res = await fetch(`http://127.0.0.1:8000/api/v1/sessions/${pendingSessionId}/resume`, {
+        method: "POST",
+      });
+      const resumed = await res.json();
+      setEvents((prev) => [...prev, { event: "resumed_completed", ...resumed }]);
+      setPendingSessionId(null);
+    } finally {
       setLoading(false);
     }
   };
@@ -63,6 +87,21 @@ export default function HomePage() {
           {loading ? "Streaming..." : "Dispatch"}
         </button>
       </form>
+
+      {pendingSessionId && (
+        <div className="w-full max-w-2xl mb-4 flex items-center justify-between rounded-lg border border-amber-500/40 bg-amber-950/30 p-4">
+          <span className="text-sm text-amber-200">
+            Session <strong>{pendingSessionId}</strong> paused at human-in-the-loop approval gate.
+          </span>
+          <button
+            onClick={handleApproveAndResume}
+            disabled={loading}
+            className="rounded-md bg-amber-500 px-4 py-2 text-xs font-bold text-black hover:bg-amber-400"
+          >
+            Approve &amp; Resume
+          </button>
+        </div>
+      )}
 
       <div className="w-full max-w-2xl space-y-3">
         {events.map((ev, idx) => (
