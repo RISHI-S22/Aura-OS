@@ -1,5 +1,5 @@
 import json
-from typing import List, Optional
+from typing import List
 from pydantic import BaseModel, Field
 from core.cognition.context_engine import context_engine
 from core.model_router.router import model_router
@@ -80,5 +80,7 @@ class CognitivePlanner:
 
         tasks.append(SubTask(id="t1", title=command, agent="research_agent"))
         return ExecutionPlan(intent="general_inquiry", subtasks=tasks)
+
+    _heuristic_fallback = _heuristic_plan
 
 planner = CognitivePlanner()
