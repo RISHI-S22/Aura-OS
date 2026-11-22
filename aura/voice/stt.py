@@ -1,7 +1,9 @@
-from typing import Optional
+import os
+import tempfile
+import wave
 
 class SpeechToText:
-    """Transcribes audio files or buffers using faster-whisper."""
+    """Transcribes audio files or raw 16kHz mono PCM buffers using faster-whisper."""
 
     def __init__(self, model_size: str = "base", device: str = "cpu"):
         self.model_size = model_size
@@ -20,3 +22,17 @@ class SpeechToText:
             return " ".join(seg.text.strip() for seg in segments).strip()
         except Exception as exc:
             raise RuntimeError(f"STT transcription unavailable: {exc}") from exc
+
+    def transcribe_pcm_buffer(self, pcm_bytes: bytes, sample_rate: int = 16000) -> str:
+        fd, tmp_path = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        try:
+            with wave.open(tmp_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(sample_rate)
+                wf.writeframes(pcm_bytes)
+            return self.transcribe_file(tmp_path)
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
