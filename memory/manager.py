@@ -1,4 +1,4 @@
-from typing import Any, Dict, List
+from typing import Any, Dict
 from memory.episodic.episodic_memory import EpisodicMemory
 from memory.procedural.procedural_memory import ProceduralMemory
 from memory.semantic.semantic_memory import SemanticMemory
@@ -20,6 +20,7 @@ class MemoryManager:
             "preferences": self.user.get_preferences(),
             "recent_episodes": self.episodic.recent(limit=3),
             "semantic_hits": self.semantic.search(query, limit=3),
+            "learned_procedures": self.procedural.recall(query, limit=2),
         }
 
 memory_manager = MemoryManager()
