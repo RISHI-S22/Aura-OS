@@ -8,7 +8,8 @@ class DesktopActionPlanner:
     SYSTEM_PROMPT = (
         "You are an autonomous desktop control module. Given a goal, live actionable Windows UI "
         "controls, and OCR text blocks, return valid JSON with keys: "
-        "'action' ('click_control' | 'type_text' | 'hotkey' | 'done'), 'target_name', and optional 'text'."
+        "'action' ('launch_app' | 'click_control' | 'type_text' | 'hotkey' | 'done'), "
+        "'target_name', and optional 'text'. Use 'launch_app' if the target application window is not open yet."
     )
 
     def decide_next_action(
@@ -18,6 +19,10 @@ class DesktopActionPlanner:
         ocr_blocks: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
         if not controls and not ocr_blocks:
+            lowered = goal.lower()
+            if lowered.startswith(("open ", "launch ", "start ")):
+                app_name = goal.split(maxsplit=1)[1].strip()
+                return {"action": "launch_app", "target_name": app_name}
             return {"action": "done", "reason": "No actionable UI elements detected"}
 
         messages = [
