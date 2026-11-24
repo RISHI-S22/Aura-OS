@@ -1,41 +1,50 @@
-import os
 from typing import Any, Dict, List, Optional
-from core.model_router.fallback import FallbackHandler
+from core.model_router.fallback_handler import FallbackHandler
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 class ModelRouter:
-    """Unified routing gateway across LLM providers with automatic fallback."""
+    """Universal multi-provider LiteLLM gateway with automatic fallback across cloud and local models."""
 
     def __init__(self):
-        self.primary_model = os.getenv("AURA_PRIMARY_MODEL", "gemini/gemini-1.5-flash")
-        self.fast_model = os.getenv("AURA_FAST_MODEL", "gemini/gemini-1.5-flash")
+        self.fallback = FallbackHandler()
+
+    def get_routing_status(self) -> Dict[str, Any]:
+        return {
+            "model_chain": self.fallback.get_model_chain(),
+            "providers": self.fallback.configured_providers(),
+        }
 
     def completion(
         self,
         messages: List[Dict[str, str]],
         model: Optional[str] = None,
-        temperature: float = 0.2,
-        response_format: Optional[Any] = None,
-        **kwargs,
+        response_format: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
     ) -> Any:
         import litellm
-        litellm.suppress_debug_info = True
 
-        selected = model or self.fast_model
-        attempts = len(FallbackHandler.MODEL_CHAIN)
+        candidates = [model] if model else self.fallback.get_model_chain()
+        last_error: Optional[Exception] = None
 
-        last_err = None
-        for _ in range(attempts):
+        for candidate in candidates:
             try:
-                return litellm.completion(
-                    model=selected,
-                    messages=messages,
-                    temperature=temperature,
-                    response_format=response_format,
+                call_kwargs: Dict[str, Any] = {
+                    "model": candidate,
+                    "messages": messages,
                     **kwargs,
-                )
-            except Exception as err:
-                last_err = err
-                selected = FallbackHandler.get_next(selected)
-        raise last_err
+                }
+                if response_format is not None:
+                    call_kwargs["response_format"] = response_format
+                return litellm.completion(**call_kwargs)
+            except Exception as exc:
+                last_error = exc
+                continue
+
+        raise RuntimeError(f"All configured models failed ({candidates}): {last_error}")
 
 model_router = ModelRouter()
