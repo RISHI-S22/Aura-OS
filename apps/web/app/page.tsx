@@ -1,13 +1,21 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 
 export default function HomePage() {
   const [command, setCommand] = useState("");
   const [liveMode, setLiveMode] = useState(false);
   const [events, setEvents] = useState<any[]>([]);
   const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
+  const [modelInfo, setModelInfo] = useState<{ model_chain: string[]; providers: Record<string, boolean> } | null>(null);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    fetch("http://127.0.0.1:8000/api/v1/models")
+      .then((res) => res.json())
+      .then((data) => setModelInfo(data))
+      .catch(() => {});
+  }, []);
 
   const handleDispatch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -65,12 +73,29 @@ export default function HomePage() {
     }
   };
 
+  const activeProviders = modelInfo
+    ? Object.entries(modelInfo.providers)
+        .filter(([, enabled]) => enabled)
+        .map(([name]) => name)
+    : [];
+
   return (
     <main className="flex min-h-screen flex-col items-center justify-center p-8">
       <h1 className="text-5xl font-extrabold tracking-wider bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent mb-3">
         AURA
       </h1>
-      <p className="text-neutral-400 mb-6">Autonomous Universal Reasoning Assistant — Live Execution Cockpit</p>
+      <p className="text-neutral-400 mb-3">Autonomous Universal Reasoning Assistant — Live Execution Cockpit</p>
+
+      {modelInfo && (
+        <div className="mb-6 flex flex-wrap items-center justify-center gap-2 text-xs text-neutral-400">
+          <span className="rounded border border-neutral-800 bg-neutral-900 px-2.5 py-1">
+            Primary: <strong className="text-cyan-400">{modelInfo.model_chain[0]}</strong>
+          </span>
+          <span className="rounded border border-neutral-800 bg-neutral-900 px-2.5 py-1">
+            Configured Providers: <strong className="text-emerald-400">{activeProviders.join(", ") || "ollama"}</strong>
+          </span>
+        </div>
+      )}
 
       <form onSubmit={handleDispatch} className="w-full max-w-2xl space-y-3 mb-6">
         <div className="flex gap-3">
