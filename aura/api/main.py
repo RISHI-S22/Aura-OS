@@ -7,6 +7,7 @@ from agents.base.agent_registry import agent_registry
 from aura.integrations.mcp import mcp_registry
 from aura.security.approval import ApprovalGate
 from aura.voice.conversation import VoiceConversationEngine
+from core.model_router.router import model_router
 from core.orchestration.dispatcher import dispatcher
 from core.orchestration.graph import aura_graph, execute_node
 from core.planning.dependency_graph import DependencyGraph
@@ -17,7 +18,7 @@ from memory.manager import memory_manager
 app = FastAPI(
     title="AURA OS API",
     description="Autonomous Universal Reasoning Assistant Central Brain Endpoint",
-    version="0.5.0",
+    version="0.6.0",
 )
 
 app.add_middleware(
@@ -40,7 +41,11 @@ class ApprovalRequest(BaseModel):
 @app.get("/health")
 @app.get("/api/v1/health")
 def health_check():
-    return {"status": "online", "system": "AURA-OS", "version": "0.5.0"}
+    return {"status": "online", "system": "AURA-OS", "version": "0.6.0"}
+
+@app.get("/api/v1/models")
+def get_models():
+    return model_router.get_routing_status()
 
 @app.get("/api/v1/capabilities")
 def get_capabilities():
