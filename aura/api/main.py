@@ -152,6 +152,8 @@ async def websocket_voice_stream(websocket: WebSocket):
     try:
         while True:
             message = await websocket.receive()
+            if message.get("type") == "websocket.disconnect":
+                break
             if "bytes" in message and message["bytes"]:
                 chunk = message["bytes"]
                 if vad.is_speech(chunk):
