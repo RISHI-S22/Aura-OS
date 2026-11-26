@@ -4,9 +4,10 @@ from agents.computer.action_planner import DesktopActionPlanner
 from agents.computer.screen_analyzer import ScreenAnalyzer
 from core.verification.screen_delta import ScreenDeltaVerifier
 from tools.computer import UniversalDesktopPrimitive
+from tools.vision.som_grounding import SetOfMarksGrounder
 
 class DesktopAgent(BaseAgent):
-    """Autonomous desktop agent operating arbitrary Windows apps via closed-loop perception."""
+    """Autonomous desktop agent operating arbitrary Windows apps via UIA + OCR + Set-of-Marks."""
 
     def __init__(self, max_steps: int = 5):
         super().__init__(name="desktop_agent", description="General-purpose Windows OS application controller")
@@ -28,17 +29,24 @@ class DesktopAgent(BaseAgent):
         for step_idx in range(self.max_steps):
             perception = self.analyzer.analyze(raw_controls, screenshot_path=screenshot_path)
             actionable = perception["actionable_controls"]
+            marks = SetOfMarksGrounder.build_grounded_elements(actionable, perception["ocr_blocks"])
             before_sig = ScreenDeltaVerifier.compute_state_signature(actionable)
 
             decision = self.action_planner.decide_next_action(
                 goal=goal,
                 controls=actionable,
                 ocr_blocks=perception["ocr_blocks"],
+                grounded_marks=marks,
             )
+            coords = None
+            if decision.get("mark_id") is not None:
+                coords = SetOfMarksGrounder.resolve_mark_center(marks, int(decision["mark_id"]))
+
             act_result = UniversalDesktopPrimitive.execute_os_action(
                 action=decision.get("action", "done"),
                 target_name=decision.get("target_name", ""),
                 text=decision.get("text"),
+                coords=coords,
                 dry_run=not live_mode,
             )
 

@@ -78,7 +78,7 @@ class UniversalDesktopPrimitive:
 
     @classmethod
     def capture_active_window_controls(cls) -> List[Dict[str, Any]]:
-        """Dynamically inspects the active foreground Windows UI Automation tree."""
+        """Dynamically inspects the active foreground Windows UI Automation tree with bounding boxes."""
         try:
             from pywinauto import Desktop
             active_win = Desktop(backend="uia").active()
@@ -90,10 +90,13 @@ class UniversalDesktopPrimitive:
                 ctype = getattr(info, "control_type", "")
                 name = (getattr(info, "name", "") or "").strip()
                 if ctype in cls.ACTIONABLE_TYPES and name:
+                    rect = getattr(info, "rectangle", None)
+                    bbox = [rect.left, rect.top, rect.width(), rect.height()] if rect else None
                     extracted.append({
                         "control_type": ctype,
                         "name": name,
                         "is_enabled": bool(getattr(info, "enabled", True)),
+                        "bbox": bbox,
                     })
             return extracted
         except Exception:
@@ -105,9 +108,10 @@ class UniversalDesktopPrimitive:
         action: str,
         target_name: str = "",
         text: Optional[str] = None,
+        coords: Optional[Dict[str, int]] = None,
         dry_run: bool = True,
     ) -> Dict[str, Any]:
-        """Executes universal OS UIA actions without hardcoded screen coordinates."""
+        """Executes universal OS UIA or Set-of-Marks coordinate actions."""
         if action == "launch_app":
             return cls.focus_or_launch_app(target_name or (text or ""), dry_run=dry_run)
 
@@ -117,14 +121,19 @@ class UniversalDesktopPrimitive:
                 "mode": "dry_run",
                 "action": action,
                 "target_name": target_name,
+                "coords": coords,
             }
         try:
-            from pywinauto import Desktop
+            from pywinauto import Desktop, mouse
             from pywinauto.keyboard import send_keys
 
             if action == "hotkey" and text:
                 send_keys(text)
                 return {"executed": True, "action": "hotkey", "keys": text}
+
+            if action == "click_mark" and coords:
+                mouse.click(coords=(coords["x"], coords["y"]))
+                return {"executed": True, "action": "click_mark", "coords": coords}
 
             active_win = Desktop(backend="uia").active()
             if not active_win:
@@ -140,6 +149,12 @@ class UniversalDesktopPrimitive:
                         ctrl.set_focus()
                         send_keys(text, with_spaces=True)
                         return {"executed": True, "action": "type_text", "target_name": name}
+
+            if coords:
+                mouse.click(coords=(coords["x"], coords["y"]))
+                if action == "type_text" and text is not None:
+                    send_keys(text, with_spaces=True)
+                return {"executed": True, "action": f"{action}_via_som", "coords": coords}
 
             return {"executed": False, "reason": f"Control '{target_name}' not found in active window"}
         except Exception as exc:
