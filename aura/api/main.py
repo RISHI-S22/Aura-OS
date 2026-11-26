@@ -7,6 +7,7 @@ from agents.base.agent_registry import agent_registry
 from aura.integrations.mcp import mcp_registry
 from aura.security.approval import ApprovalGate
 from aura.voice.conversation import VoiceConversationEngine
+from aura.voice.vad import VoiceActivityDetector
 from core.model_router.router import model_router
 from core.orchestration.dispatcher import dispatcher
 from core.orchestration.graph import aura_graph, execute_node
@@ -18,7 +19,7 @@ from memory.manager import memory_manager
 app = FastAPI(
     title="AURA OS API",
     description="Autonomous Universal Reasoning Assistant Central Brain Endpoint",
-    version="0.6.0",
+    version="0.7.0",
 )
 
 app.add_middleware(
@@ -30,6 +31,7 @@ app.add_middleware(
 )
 
 voice_engine = VoiceConversationEngine()
+vad = VoiceActivityDetector()
 
 class CommandRequest(BaseModel):
     command: str
@@ -41,7 +43,7 @@ class ApprovalRequest(BaseModel):
 @app.get("/health")
 @app.get("/api/v1/health")
 def health_check():
-    return {"status": "online", "system": "AURA-OS", "version": "0.6.0"}
+    return {"status": "online", "system": "AURA-OS", "version": "0.7.0"}
 
 @app.get("/api/v1/models")
 def get_models():
@@ -142,6 +144,33 @@ async def execute_voice_utterance(req: CommandRequest):
     if not req.command.strip():
         raise HTTPException(status_code=400, detail="Transcript cannot be empty")
     return await voice_engine.process_text_utterance(req.command)
+
+@app.websocket("/ws/voice")
+async def websocket_voice_stream(websocket: WebSocket):
+    await websocket.accept()
+    speech_buffer = bytearray()
+    try:
+        while True:
+            message = await websocket.receive()
+            if "bytes" in message and message["bytes"]:
+                chunk = message["bytes"]
+                if vad.is_speech(chunk):
+                    speech_buffer.extend(chunk)
+                    await websocket.send_json({"event": "vad_speech", "buffered_bytes": len(speech_buffer)})
+            elif "text" in message and message["text"] == "FLUSH":
+                if not speech_buffer:
+                    await websocket.send_json({"event": "silence_ignored"})
+                    continue
+                try:
+                    transcript = voice_engine.stt.transcribe_pcm_buffer(bytes(speech_buffer))
+                    speech_buffer.clear()
+                    result = await voice_engine.process_text_utterance(transcript)
+                    await websocket.send_json({"event": "voice_completed", **result})
+                except Exception as exc:
+                    speech_buffer.clear()
+                    await websocket.send_json({"event": "stt_unavailable", "detail": str(exc)})
+    except WebSocketDisconnect:
+        pass
 
 @app.websocket("/ws/commands")
 async def websocket_command_stream(websocket: WebSocket):
