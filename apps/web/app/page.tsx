@@ -1,14 +1,19 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 
 export default function HomePage() {
   const [command, setCommand] = useState("");
   const [liveMode, setLiveMode] = useState(false);
+  const [recording, setRecording] = useState(false);
   const [events, setEvents] = useState<any[]>([]);
   const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
   const [modelInfo, setModelInfo] = useState<{ model_chain: string[]; providers: Record<string, boolean> } | null>(null);
   const [loading, setLoading] = useState(false);
+
+  const voiceWsRef = useRef<WebSocket | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
 
   useEffect(() => {
     fetch("http://127.0.0.1:8000/api/v1/models")
@@ -58,6 +63,54 @@ export default function HomePage() {
     }
   };
 
+  const startVoiceStream = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const ws = new WebSocket("ws://127.0.0.1:8000/ws/voice");
+      const audioCtx = new AudioContext({ sampleRate: 16000 });
+      const source = audioCtx.createMediaStreamSource(stream);
+      const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+
+      ws.onmessage = (msg) => {
+        const parsed = JSON.parse(msg.data);
+        if (parsed.event !== "vad_speech") {
+          setEvents((prev) => [...prev, parsed]);
+          if (parsed.transcript) setCommand(parsed.transcript);
+          ws.close();
+        }
+      };
+
+      processor.onaudioprocess = (e) => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        const float32 = e.inputBuffer.getChannelData(0);
+        const int16 = new Int16Array(float32.length);
+        for (let i = 0; i < float32.length; i++) {
+          const s = Math.max(-1, Math.min(1, float32[i]));
+          int16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+        }
+        ws.send(int16.buffer);
+      };
+
+      source.connect(processor);
+      processor.connect(audioCtx.destination);
+      voiceWsRef.current = ws;
+      audioCtxRef.current = audioCtx;
+      streamRef.current = stream;
+      setRecording(true);
+    } catch {
+      setEvents((prev) => [...prev, { event: "mic_error", detail: "Microphone access denied or unavailable" }]);
+    }
+  };
+
+  const stopVoiceStream = () => {
+    setRecording(false);
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    audioCtxRef.current?.close();
+    if (voiceWsRef.current && voiceWsRef.current.readyState === WebSocket.OPEN) {
+      voiceWsRef.current.send("FLUSH");
+    }
+  };
+
   const handleApproveAndResume = async () => {
     if (!pendingSessionId) return;
     setLoading(true);
@@ -98,14 +151,24 @@ export default function HomePage() {
       )}
 
       <form onSubmit={handleDispatch} className="w-full max-w-2xl space-y-3 mb-6">
-        <div className="flex gap-3">
+        <div className="flex gap-2">
           <input
             type="text"
             value={command}
             onChange={(e) => setCommand(e.target.value)}
-            placeholder="Enter an autonomous command..."
+            placeholder="Enter an autonomous command or hold Speak..."
             className="flex-1 rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-white focus:border-cyan-500 focus:outline-none"
           />
+          <button
+            type="button"
+            onMouseDown={startVoiceStream}
+            onMouseUp={stopVoiceStream}
+            className={`rounded-lg px-4 py-3 font-semibold text-white ${
+              recording ? "bg-rose-600 animate-pulse" : "bg-neutral-800 hover:bg-neutral-700"
+            }`}
+          >
+            {recording ? "Listening..." : "Hold Speak"}
+          </button>
           <button
             type="submit"
             disabled={loading}
