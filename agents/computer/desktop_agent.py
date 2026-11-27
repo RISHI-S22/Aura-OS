@@ -4,6 +4,7 @@ from agents.computer.action_planner import DesktopActionPlanner
 from agents.computer.screen_analyzer import ScreenAnalyzer
 from core.verification.screen_delta import ScreenDeltaVerifier
 from tools.computer import UniversalDesktopPrimitive
+from tools.vision.screen_capture import LiveScreenCapture
 from tools.vision.som_grounding import SetOfMarksGrounder
 
 class DesktopAgent(BaseAgent):
@@ -22,11 +23,14 @@ class DesktopAgent(BaseAgent):
         if raw_controls is None:
             raw_controls = UniversalDesktopPrimitive.capture_active_window_controls() if live_mode else []
 
-        screenshot_path = task.get("screenshot_path", "")
         history: List[Dict[str, Any]] = []
         actionable: List[Dict[str, Any]] = []
 
         for step_idx in range(self.max_steps):
+            screenshot_path = task.get("screenshot_path", "")
+            if live_mode and not screenshot_path:
+                screenshot_path = LiveScreenCapture.capture_foreground_or_screen() or ""
+
             perception = self.analyzer.analyze(raw_controls, screenshot_path=screenshot_path)
             actionable = perception["actionable_controls"]
             marks = SetOfMarksGrounder.build_grounded_elements(actionable, perception["ocr_blocks"])
@@ -54,6 +58,7 @@ class DesktopAgent(BaseAgent):
                 history.append({
                     "step": step_idx + 1,
                     "before_sig": before_sig,
+                    "screenshot": screenshot_path or None,
                     "state_changed": False,
                     "decision": decision,
                     "actuation": act_result,
@@ -67,6 +72,7 @@ class DesktopAgent(BaseAgent):
             history.append({
                 "step": step_idx + 1,
                 "before_sig": before_sig,
+                "screenshot": screenshot_path or None,
                 "state_changed": changed,
                 "decision": decision,
                 "actuation": act_result,
